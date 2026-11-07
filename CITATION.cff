@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the repository."
+title: "GCCP7 Native CLI"
+type: software
+authors:
+  - name: capskov
+version: 0.1.0-alpha.1
+license: GPL-2.0-or-later
+repository-code: "https://github.com/capskov/gccp7-native-cli"

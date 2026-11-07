@@ -1,0 +1,88 @@
+"""Fixed local file IPC client. Reuses the proven one-shot loader transport.
+Only the already-open, birth-pinned worker is eligible; never starts GCCP.
+"""
+from pathlib import Path
+import ctypes as C
+from ctypes import wintypes as W
+import hashlib,json,os,re,subprocess,time,uuid
+from gccp_foundation.adapters.native_windows.native_transport import K,P,U,modules,call_once
+K.GetExitCodeProcess.argtypes=[W.HANDLE,C.POINTER(W.DWORD)]
+ROOT=Path(__file__).resolve().parent
+BUILD=ROOT/'build'
+DLL=BUILD/'gccp_business.dll'
+PID=__PID__;BIRTH=__BIRTH__;HWND=__HWND__
+COMMAND=__COMMAND_ID__
+PROFILE=Path(__PROFILE__)
+def write_new(path,data):
+    with path.open('x',encoding='utf-8') as f:
+        json.dump(data,f,ensure_ascii=False,indent=2);f.flush();os.fsync(f.fileno())
+class NativeBridge:
+    def __init__(self):
+        self.records=[]
+        self.pins=json.loads(PROFILE.read_text(encoding='utf-8-sig'))['fingerprints']
+        provenance=json.loads((BUILD/'build-provenance.json').read_text(encoding='utf-8-sig'))
+        self.hash=hashlib.sha256(DLL.read_bytes()).hexdigest()
+        if self.hash!=provenance['binary_sha256'].lower() or hashlib.sha256(Path(provenance['source']).read_bytes()).hexdigest()!=provenance['source_sha256'].lower():raise ValueError('Bridge provenance changed')
+        header=json.loads((BUILD/'operations-provenance.json').read_text(encoding='utf-8-sig'))
+        if hashlib.sha256((ROOT/'operations.h').read_bytes()).hexdigest()!=header['Hash'].lower():raise ValueError('Header changed since build')
+        for path,digest in self.pins.items():
+            if hashlib.sha256(Path(path).read_bytes()).hexdigest()!=digest:raise ValueError('Pinned GCCP component changed')
+        exe=provenance['dumpbin']
+        data=subprocess.run([exe,'/nologo','/exports',str(DLL)],capture_output=True,check=True,timeout=10,creationflags=0x08000000).stdout.decode('utf-8',errors='replace')
+        match=re.findall(r'\s+1\s+0\s+([0-9A-F]+) GccpPoc01Execute\s*',data)
+        if len(match)!=1:raise ValueError('Single fixed entry missing')
+        self.rva=int(match[0],16)
+    def call(self,operation,intent=None,timeout=20,*,expected_target=None):
+        handle=K.OpenProcess(0x43a,False,PID)
+        if not handle:raise RuntimeError('Current process unavailable; stop, do not start another')
+        record=dict(operation=operation,pid=PID,replay_allowed=False)
+        allocation=None;loaded=False;nonce=uuid.uuid4().hex
+        output=ROOT/'ipc'/nonce;output.parent.mkdir(exist_ok=True)
+        try:
+            times=[W.FILETIME() for _ in range(4)]
+            if not K.GetProcessTimes(handle,*[C.byref(t) for t in times]) or str((times[0].dwHighDateTime<<32)|times[0].dwLowDateTime)!=BIRTH:raise ValueError('Worker birth changed')
+            current=modules(handle)
+            if any('gammaray' in Path(m['path']).name.casefold() for m in current):raise ValueError('This experiment excludes GammaRay')
+            title=C.create_unicode_buffer(8192);owner=W.DWORD();U.GetWindowTextW(HWND,title,len(title));U.GetWindowThreadProcessId(HWND,C.byref(owner))
+            if owner.value!=PID or not title.value.replace(chr(92), "/").casefold().startswith(__PROJECT_TITLE_PREFIX__.casefold()):raise ValueError('Current project window changed')
+            request=dict(operation=operation,command_id=COMMAND,pid=PID,created_filetime=BIRTH,nonce=nonce,
+                expires_ms=int(time.time()*1000)+(max(120000,int(timeout*1000)+30000) if operation=="inspect" else 120000),window_title=title.value,fingerprints=self.pins)
+            if intent:request['outer_intent_id']=intent
+            if expected_target is not None:request['expected_target']=expected_target
+            record['request']=request;write_new(output.with_suffix('.intent.json'),record)
+            if (BUILD/'request.json').exists():
+                previous=json.loads((BUILD/'request.json').read_text(encoding='utf-8'))
+                if not (BUILD/(previous['nonce']+'.json')).exists():raise RuntimeError('Prior native request unresolved; never overwrite or replay')
+                write_new(BUILD/'request.next.json',request);os.replace(BUILD/'request.next.json',BUILD/'request.json')
+            else:write_new(BUILD/'request.json',request)
+            module=[m for m in current if Path(m['path']).resolve()==DLL.resolve()]
+            if not module:
+                local=K.GetProcAddress(K.GetModuleHandleW('kernel32.dll'),b'LoadLibraryW');owner_module=W.HMODULE()
+                if not local or not K.GetModuleHandleExW(6,local,C.byref(owner_module)):raise C.WinError(C.get_last_error())
+                path=C.create_unicode_buffer(32768);K.GetModuleFileNameW(owner_module,path,len(path))
+                remote=[m for m in current if Path(m['path']).name.casefold()==Path(path.value).name.casefold()]
+                if len(remote)!=1 or hashlib.sha256(Path(remote[0]['path']).read_bytes()).digest()!=hashlib.sha256(Path(path.value).read_bytes()).digest():raise ValueError('Loader module mismatch')
+                payload=(str(DLL)+'\0').encode('utf-16-le');allocation=K.VirtualAllocEx(handle,None,len(payload),0x3000,4)
+                if not allocation:raise C.WinError(C.get_last_error())
+                n=C.c_size_t();buffer=C.create_string_buffer(payload)
+                if not K.WriteProcessMemory(handle,allocation,buffer,len(payload),C.byref(n)) or n.value!=len(payload):raise C.WinError(C.get_last_error())
+                record['load']=call_once(handle,remote[0]['base']+local-owner_module.value,allocation);loaded=True
+                module=[m for m in modules(handle) if Path(m['path']).resolve()==DLL.resolve()]
+            if len(module)!=1:raise RuntimeError('Load outcome unknown; no reload')
+            record['initialize']=call_once(handle,module[0]['base']+self.rva,None)
+            if record['initialize']['exit_code']!=1:raise RuntimeError('Native entry refused; no repeat')
+            receipt=BUILD/(nonce+'.json');deadline=time.monotonic()+timeout
+            while not receipt.exists() and time.monotonic()<deadline:
+                # Read-only wait for this exact nonce, not a new request.
+                alive=W.DWORD()
+                if not K.GetExitCodeProcess(handle,C.byref(alive)) or alive.value!=259:raise RuntimeError('Target exited; stop')
+                time.sleep(.2)
+            if not receipt.exists():raise TimeoutError('Native result pending/unknown; no repeat')
+            result=json.loads(receipt.read_text(encoding='utf-8'));record['receipt']=result
+            if result.get('nonce')!=nonce or result.get('pid')!=PID or result.get('status')!='observed':raise ValueError('Native request blocked: '+str(result.get('error')))
+            return result
+        except Exception as e:
+            record['error']=type(e).__name__+': '+str(e);raise
+        finally:
+            if allocation and loaded:K.VirtualFreeEx(handle,allocation,0,0x8000)
+            K.CloseHandle(handle);write_new(output.with_suffix('.result.json'),record);self.records.append(str(output.with_suffix('.result.json')))

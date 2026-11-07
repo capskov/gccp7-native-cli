@@ -1,0 +1,121 @@
+{
+  "contract_version": "0.1",
+  "state": "partial_registration_status_evidence_safe_cancel",
+  "mcp_transport": "stdio",
+  "cli_pattern": "gccp <command> --request <json> --output <json>",
+  "shared_application_service": true,
+  "response_schema_ref": "domain.schema.json#/$defs/Envelope",
+  "tools": [
+    {
+      "name": "gccp_environment",
+      "cli": "environment inspect",
+      "input_schema_ref": "domain.schema.json#/$defs/EnvironmentRequest",
+      "output_semantics": "environment and per-capability evidence",
+      "application_service": "environment",
+      "may_modify_workcopy": false,
+      "implemented": false,
+      "data_schema_ref": "domain.schema.json#/$defs/EnvironmentData"
+    },
+    {
+      "name": "gccp_project_open",
+      "cli": "project open",
+      "input_schema_ref": "domain.schema.json#/$defs/ProjectOpenRequest",
+      "output_semantics": "project_id, session_id, library, original protection",
+      "application_service": "project",
+      "may_modify_workcopy": true,
+      "implemented": false,
+      "data_schema_ref": "domain.schema.json#/$defs/ProjectData"
+    },
+    {
+      "name": "gccp_project_read",
+      "cli": "project read",
+      "input_schema_ref": "domain.schema.json#/$defs/ProjectReadRequest",
+      "output_semantics": "snapshot_ref, complete, rows/resources, scope",
+      "application_service": "observation",
+      "may_modify_workcopy": false,
+      "implemented": false,
+      "data_schema_ref": "domain.schema.json#/$defs/ObservationData"
+    },
+    {
+      "name": "gccp_quota_search",
+      "cli": "quota search",
+      "input_schema_ref": "domain.schema.json#/$defs/QuotaSearchRequest",
+      "output_semantics": "snapshot_ref, complete, counts, candidates and short-lived refs",
+      "application_service": "observation",
+      "may_modify_workcopy": false,
+      "implemented": false,
+      "data_schema_ref": "domain.schema.json#/$defs/CandidatesData"
+    },
+    {
+      "name": "gccp_plan_validate",
+      "cli": "plan validate",
+      "input_schema_ref": "domain.schema.json#/$defs/JobPlan",
+      "output_semantics": "plan_digest, executable actions, errors, capability gaps",
+      "application_service": "validation",
+      "may_modify_workcopy": false,
+      "implemented": true,
+      "data_schema_ref": "domain.schema.json#/$defs/ValidationData"
+    },
+    {
+      "name": "gccp_job_submit",
+      "cli": "job submit",
+      "input_schema_ref": "domain.schema.json#/$defs/JobPlan",
+      "output_semantics": "job_id, plan_digest, accepted or existing job state",
+      "application_service": "job",
+      "may_modify_workcopy": true,
+      "implemented": true,
+      "data_schema_ref": "domain.schema.json#/$defs/JobData"
+    },
+    {
+      "name": "gccp_job_status",
+      "cli": "job status",
+      "input_schema_ref": "domain.schema.json#/$defs/JobStatusRequest",
+      "output_semantics": "job state, next_event, action summaries, verification, questions",
+      "application_service": "job",
+      "may_modify_workcopy": false,
+      "implemented": true,
+      "data_schema_ref": "domain.schema.json#/$defs/JobData"
+    },
+    {
+      "name": "gccp_job_reconcile",
+      "cli": "job reconcile",
+      "input_schema_ref": "domain.schema.json#/$defs/JobIdRequest",
+      "output_semantics": "observed state, reconciliation result; no blind replay",
+      "application_service": "job",
+      "may_modify_workcopy": true,
+      "implemented": false,
+      "data_schema_ref": "domain.schema.json#/$defs/JobData"
+    },
+    {
+      "name": "gccp_job_cancel",
+      "cli": "job cancel",
+      "input_schema_ref": "domain.schema.json#/$defs/JobIdRequest",
+      "output_semantics": "safe-boundary cancellation and completed effects",
+      "application_service": "job",
+      "may_modify_workcopy": true,
+      "implemented": true,
+      "data_schema_ref": "domain.schema.json#/$defs/JobData"
+    },
+    {
+      "name": "gccp_project_commit",
+      "cli": "project commit",
+      "input_schema_ref": "domain.schema.json#/$defs/CommitRequest",
+      "output_semantics": "output artifact, persisted snapshot, verification scopes",
+      "application_service": "commit",
+      "may_modify_workcopy": true,
+      "implemented": false,
+      "data_schema_ref": "domain.schema.json#/$defs/CommitData"
+    },
+    {
+      "name": "gccp_evidence_read",
+      "cli": "evidence read",
+      "input_schema_ref": "domain.schema.json#/$defs/EvidenceReadRequest",
+      "output_semantics": "bounded structured artifact slice",
+      "application_service": "evidence",
+      "may_modify_workcopy": false,
+      "implemented": true,
+      "data_schema_ref": "domain.schema.json#/$defs/EvidenceData"
+    }
+  ],
+  "data_validation_rule": "Validate data_schema_ref for successful observed/accepted/completed payloads; blocked/error payload data may be null, or the documented JobData for an existing job. Semantic completion requires requested verification scopes passed."
+}

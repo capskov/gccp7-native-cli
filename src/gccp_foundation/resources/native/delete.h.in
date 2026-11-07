@@ -1,0 +1,204 @@
+#include <QAbstractButton>
+#include <QBrush>
+#include <QMetaMethod>
+#include <QPersistentModelIndex>
+#include <QAction>
+#include <QFont>
+#include <QLabel>
+#include <QTimer>
+
+static QJsonArray quotaValues(const QAbstractItemModel *model, const QModelIndex &row) {
+    QJsonArray values;
+    for (int column = 0; column < model->columnCount(); ++column)
+        values.append(row.sibling(row.row(), column).data().toString());
+    return values;
+}
+
+static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
+    const auto op = req["operation"].toString();
+    const bool confirm = op == "quota.delete.confirm";
+    if (op != "inspect" && !(op == "quota.delete" && !kConfirmOnly) && !(confirm && kAction == "Delete")) {
+        error = "operation_not_allowed";
+        return false;
+    }
+    QJsonArray modals;
+    for (auto window : QApplication::topLevelWidgets()) {
+        if (!window->isVisible() || !window->isModal()) continue;
+        QJsonArray labels, buttons;
+        for (auto label : window->findChildren<QLabel*>())
+            if (label->isVisible()) labels.append(label->text());
+        for (auto button : window->findChildren<QAbstractButton*>())
+            if (button->isVisible()) buttons.append(button->text());
+        modals.append(QJsonObject{{"class", window->metaObject()->className()},
+            {"title", window->windowTitle()}, {"labels", labels}, {"buttons", buttons}});
+    }
+    out["modals"] = modals;
+    if (op == "quota.delete" && (!modals.isEmpty() || QApplication::activePopupWidget())) {
+        error = "modal_or_popup_blocks_delete";
+        return false;
+    }
+
+    auto module = GetModuleHandleW(L"GLDTableView.dll");
+    auto modelGetter = reinterpret_cast<QAbstractItemModel* (__fastcall *)(const void*)>(
+        GetProcAddress(module, "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
+    auto selectionGetter = reinterpret_cast<QItemSelectionModel* (__fastcall *)(const void*)>(
+        GetProcAddress(module, "?selectionModel@GlodonAbstractItemView@@QEBAPEAVGLDItemSelectionModel@@XZ"));
+    auto currentGetter = GetProcAddress(module, "?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
+    if (!modelGetter || !selectionGetter || !currentGetter) {
+        error = "fixed_getter_missing";
+        return false;
+    }
+    QWidget *budget = nullptr, *frame = nullptr;
+    QAbstractItemModel *model = nullptr;
+    int budgets = 0;
+    for (auto w : QApplication::allWidgets()) {
+        if (!w->isVisible() || !w->inherits("GTPGSPTableView")) continue;
+        auto view = w->qt_metacast("GlodonAbstractItemView");
+        auto m = view ? modelGetter(view) : nullptr;
+        if (!m || m->thread() != qApp->thread() || m->columnCount() != 13 ||
+            m->headerData(4, Qt::Horizontal).toString() != "工程量表达式") continue;
+        for (auto ancestor = w->parentWidget(); ancestor; ancestor = ancestor->parentWidget()) {
+            if (!ancestor->inherits("GBEBQGridFrame")) continue;
+            budget = w; model = m; frame = ancestor; ++budgets;
+            break;
+        }
+    }
+    if (budgets != 1 || model->rowCount() != 1) {
+        error = "budget_model_not_unique";
+        return false;
+    }
+    const auto project = model->index(0, 0);
+    QModelIndex parent, target;
+    int parents = 0, targets = 0;
+    if (model->rowCount(project) > 500) { error = "division_bound"; return false; }
+    for (int r = 0; r < model->rowCount(project); ++r) {
+        auto row = model->index(r, 0, project);
+        auto values = quotaValues(model, row);
+        if (values[1] == "部" && values[12] == kParent) { parent = row; ++parents; }
+    }
+    if (parents != 1 || model->rowCount(parent) > 500) {
+        error = "parent_not_unique";
+        return false;
+    }
+    for (int r = 0; r < model->rowCount(parent); ++r) {
+        auto row = model->index(r, 0, parent);
+        auto values = quotaValues(model, row);
+        if (values[1] == "定" && values[0] == kCode && values[2] == kName && values[3] == kUnit) {
+            target = row; ++targets;
+        }
+    }
+    out["target_matches"] = targets;
+    if (targets == 1) {
+        QJsonArray strikeout, enabledCells, foreground, background;
+        for (int column = 0; column < model->columnCount(); ++column) {
+            auto cell = target.sibling(target.row(), column);
+            strikeout.append(cell.data(Qt::FontRole).value<QFont>().strikeOut());
+            enabledCells.append(bool(model->flags(cell) & Qt::ItemIsEnabled));
+            foreground.append(cell.data(Qt::ForegroundRole).value<QBrush>().color().name());
+            background.append(cell.data(Qt::BackgroundRole).value<QBrush>().color().name());
+        }
+        out["target"] = QJsonObject{
+            {"values", quotaValues(model, target)},
+            {"path", QString("/0/%1/%2").arg(parent.row()).arg(target.row())},
+            {"strikeout", strikeout}, {"enabled_cells", enabledCells},
+            {"foreground", foreground}, {"background", background}
+        };
+    }
+    QAction *action = nullptr;
+    int actions = 0;
+    QJsonArray catalog;
+    for (auto candidate : frame->actions()) {
+        if (candidate->thread() != qApp->thread()) continue;
+        const auto name = candidate->objectName();
+        const auto label = candidate->text();
+        if (name == "Delete" || name == "PreDelete" || label.contains("恢复") || label.contains("临时删除")) {
+            catalog.append(QJsonObject{{"name", name}, {"text", label},
+                {"enabled", candidate->isEnabled()}, {"shortcut", candidate->shortcut().toString()}});
+        }
+        if (name == kAction && label == kActionText && candidate->isEnabled() && candidate->isVisible()) {
+            action = candidate; ++actions;
+        }
+    }
+    out["delete_actions"] = catalog;
+    if (op == "inspect") return true;
+    if (targets != 1 || (!confirm && actions != 1) || quotaValues(model, target) != req["expected_target"].toArray()) {
+        error = "target_or_delete_action_changed";
+        return false;
+    }
+    auto view = budget->qt_metacast("GlodonAbstractItemView");
+    auto selection = selectionGetter(view);
+    if (confirm) {
+        auto modal = QApplication::activeModalWidget();
+        if (!modal || modals.size() != 1 || QApplication::activePopupWidget() ||
+            QString(modal->metaObject()->className()) != "GCCPMessageBox" || modal->windowTitle() != "确认" ||
+            !selection || selection->model() != model || selection->thread() != qApp->thread()) {
+            error = "permanent_delete_confirmation_not_verified";
+            return false;
+        }
+        auto cursor = readPinnedCurrentIndex(view, reinterpret_cast<const void*>(currentGetter));
+        auto selectedRows = selection->selectedRows();
+        if (cursor.sibling(cursor.row(), 0) != target || selectedRows.size() != 1 || selectedRows[0] != target) {
+            error = "permanent_delete_confirmation_selection_changed";
+            return false;
+        }
+        int prompts = 0, rejectButtons = 0, acceptButtons = 0;
+        QAbstractButton *accept = nullptr;
+        for (auto label : modal->findChildren<QLabel*>())
+            if (label->isVisible() && label->text() == "<p style='line-height:23px;'>确认要删除当前选中行吗？</p>")
+                ++prompts;
+        for (auto button : modal->findChildren<QAbstractButton*>()) {
+            if (!button->isVisible() || !button->isEnabled()) continue;
+            if (button->text() == "是") { accept = button; ++acceptButtons; }
+            if (button->text() == "否") ++rejectButtons;
+        }
+        if (prompts != 1 || acceptButtons != 1 || rejectButtons != 1) {
+            error = "permanent_delete_confirmation_text_or_buttons_changed";
+            return false;
+        }
+        accept->click();
+        out["native_delete_confirmation_clicked"] = true;
+        return true;
+    }
+    const auto nav = budget->metaObject()->indexOfMethod("setCurrentIndex(QModelIndex)");
+    if (!selection || selection->model() != model || selection->thread() != qApp->thread() || nav < 0) {
+        error = "budget_navigation_not_verified";
+        return false;
+    }
+    auto method = budget->metaObject()->method(nav);
+    QPersistentModelIndex expected(target);
+    QPointer<QAction> selectedAction(action);
+    if (QString(method.enclosingMetaObject()->className()) != "GSPTableView" ||
+        !method.invoke(budget, Qt::DirectConnection, Q_ARG(QModelIndex, target))) {
+        error = "budget_navigation_not_verified";
+        return false;
+    }
+    budget->setFocus(Qt::OtherFocusReason);
+    selection->select(target, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    auto current = readPinnedCurrentIndex(view, reinterpret_cast<const void*>(currentGetter));
+    auto selected = selection->selectedRows();
+    if (!expected.isValid() || current.sibling(current.row(), 0) != expected ||
+        selected.size() != 1 || selected[0] != expected || !selectedAction ||
+        !selectedAction->isEnabled() || selectedAction->text() != kActionText ||
+        QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
+        error = "delete_single_selection_not_verified";
+        return false;
+    }
+    QPointer<QWidget> boundView(budget);
+    QPointer<QItemSelectionModel> boundSelection(selection);
+    const auto targetValues = req["expected_target"].toArray();
+    QTimer::singleShot(0, selectedAction, [boundView, boundSelection, expected, selectedAction, currentGetter, targetValues]() {
+        if (!boundView || !boundSelection || !expected.isValid() || !selectedAction ||
+            !selectedAction->isEnabled() || selectedAction->text() != kActionText ||
+            QApplication::activeModalWidget() || QApplication::activePopupWidget()) return;
+        auto nativeView = boundView->qt_metacast("GlodonAbstractItemView");
+        auto cursor = readPinnedCurrentIndex(nativeView, reinterpret_cast<const void*>(currentGetter));
+        const auto selectedRows = boundSelection->selectedRows();
+        if (cursor.sibling(cursor.row(), 0) == expected && selectedRows.size() == 1 &&
+            selectedRows[0] == expected && quotaValues(boundSelection->model(), expected) == targetValues)
+            selectedAction->trigger();
+    });
+    out["native_delete_queued"] = true;
+    out["business_dispatches"] = 1;
+    out["application_selection_changed"] = true;
+    return true;
+}

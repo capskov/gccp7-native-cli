@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools==75.8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gccp7-native-cli"
+version = "0.1.0a1"
+description = "A scoped native command-line bridge for GCCP7"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENSE"}
+dependencies = ["jsonschema==4.23.0"]
+
+[project.scripts]
+gccp = "gccp_foundation.application.native_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+gccp_foundation = ["resources/*.json", "resources/native/*", "resources/profiles/*.json"]

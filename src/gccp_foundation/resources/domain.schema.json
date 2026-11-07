@@ -1,0 +1,1607 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gccp-foundation:contract:0.1",
+  "title": "GCCP foundation design contract 0.1 (not implemented)",
+  "$ref": "#/$defs/JobPlan",
+  "$defs": {
+    "Identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "Decimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+    },
+    "SnapshotRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "Quantity": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "value",
+        "unit"
+      ],
+      "additionalProperties": false
+    },
+    "QuotaKey": {
+      "type": "object",
+      "properties": {
+        "library": {
+          "type": "string",
+          "minLength": 1
+        },
+        "edition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trade": {
+          "type": "string",
+          "minLength": 1
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chapter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vendor_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "library",
+        "edition",
+        "trade",
+        "code",
+        "name",
+        "unit"
+      ],
+      "additionalProperties": false
+    },
+    "ResourceIdentity": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "specification": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "code",
+        "name",
+        "specification",
+        "unit"
+      ],
+      "additionalProperties": false
+    },
+    "ResourceTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "resource_ref": {
+              "$ref": "#/$defs/Identifier"
+            }
+          },
+          "required": [
+            "resource_ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "enum": [
+                    "labor",
+                    "main_material",
+                    "material",
+                    "machine"
+                  ]
+                },
+                "identity": {
+                  "$ref": "#/$defs/ResourceIdentity"
+                }
+              },
+              "required": [
+                "role",
+                "identity"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "selector"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "from_action": {
+              "$ref": "#/$defs/Identifier"
+            },
+            "output": {
+              "const": "resource_ref"
+            }
+          },
+          "required": [
+            "from_action",
+            "output"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SourceRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "kind": {
+          "enum": [
+            "pdf",
+            "spreadsheet",
+            "cad_base",
+            "user_statement",
+            "price_list",
+            "quota_description"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "locator"
+      ],
+      "additionalProperties": false
+    },
+    "SourceRefs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Identifier"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "EnsureQuotaPayload": {
+      "type": "object",
+      "properties": {
+        "candidate_ref": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "quota_key": {
+          "$ref": "#/$defs/QuotaKey"
+        },
+        "parent_ref": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "quantity": {
+          "$ref": "#/$defs/Quantity"
+        },
+        "source_refs": {
+          "$ref": "#/$defs/SourceRefs"
+        }
+      },
+      "required": [
+        "candidate_ref",
+        "quota_key",
+        "parent_ref",
+        "quantity",
+        "source_refs"
+      ],
+      "additionalProperties": false
+    },
+    "SetQuantityPayload": {
+      "type": "object",
+      "properties": {
+        "quantity": {
+          "$ref": "#/$defs/Quantity"
+        },
+        "expected_before": {
+          "$ref": "#/$defs/SnapshotBinding"
+        },
+        "source_refs": {
+          "$ref": "#/$defs/SourceRefs"
+        }
+      },
+      "required": [
+        "quantity",
+        "expected_before",
+        "source_refs"
+      ],
+      "additionalProperties": false
+    },
+    "EditResourcePayload": {
+      "type": "object",
+      "properties": {
+        "resource_target": {
+          "$ref": "#/$defs/ResourceTarget"
+        },
+        "expected_before": {
+          "$ref": "#/$defs/ResourceIdentity"
+        },
+        "changes": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "specification": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "minLength": 1
+            },
+            "consumption": {
+              "$ref": "#/$defs/Decimal"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "minProperties": 1
+        },
+        "source_refs": {
+          "$ref": "#/$defs/SourceRefs"
+        }
+      },
+      "required": [
+        "resource_target",
+        "expected_before",
+        "changes",
+        "source_refs"
+      ],
+      "additionalProperties": false
+    },
+    "PriceItem": {
+      "type": "object",
+      "properties": {
+        "line_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "resource_target": {
+          "$ref": "#/$defs/ResourceTarget"
+        },
+        "price": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "currency": {
+          "const": "CNY"
+        },
+        "price_basis": {
+          "enum": [
+            "market",
+            "retained_original",
+            "virtual_test"
+          ]
+        },
+        "source_refs": {
+          "$ref": "#/$defs/SourceRefs"
+        }
+      },
+      "required": [
+        "line_id",
+        "resource_target",
+        "price",
+        "currency",
+        "price_basis",
+        "source_refs"
+      ],
+      "additionalProperties": false
+    },
+    "SetPricesPayload": {
+      "type": "object",
+      "properties": {
+        "resource_snapshot_ref": {
+          "$ref": "#/$defs/SnapshotBinding"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PriceItem"
+          },
+          "minItems": 1
+        },
+        "source_refs": {
+          "$ref": "#/$defs/SourceRefs"
+        }
+      },
+      "required": [
+        "resource_snapshot_ref",
+        "items",
+        "source_refs"
+      ],
+      "additionalProperties": false
+    },
+    "Action_ensure_quota": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "line_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "kind": {
+          "const": "ensure_quota"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "uniqueItems": true
+        },
+        "payload": {
+          "$ref": "#/$defs/EnsureQuotaPayload"
+        }
+      },
+      "required": [
+        "action_id",
+        "line_id",
+        "kind",
+        "depends_on",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "Action_set_quantity": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "line_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "kind": {
+          "const": "set_quantity"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "uniqueItems": true
+        },
+        "payload": {
+          "$ref": "#/$defs/SetQuantityPayload"
+        }
+      },
+      "required": [
+        "action_id",
+        "line_id",
+        "kind",
+        "depends_on",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "Action_edit_resource": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "line_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "kind": {
+          "const": "edit_resource"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "uniqueItems": true
+        },
+        "payload": {
+          "$ref": "#/$defs/EditResourcePayload"
+        }
+      },
+      "required": [
+        "action_id",
+        "line_id",
+        "kind",
+        "depends_on",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "Action_set_resource_prices": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "line_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "kind": {
+          "const": "set_resource_prices"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "uniqueItems": true
+        },
+        "payload": {
+          "$ref": "#/$defs/SetPricesPayload"
+        }
+      },
+      "required": [
+        "action_id",
+        "line_id",
+        "kind",
+        "depends_on",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "Action": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Action_ensure_quota"
+        },
+        {
+          "$ref": "#/$defs/Action_set_quantity"
+        },
+        {
+          "$ref": "#/$defs/Action_edit_resource"
+        },
+        {
+          "$ref": "#/$defs/Action_set_resource_prices"
+        }
+      ]
+    },
+    "VerificationScope": {
+      "enum": [
+        "identity",
+        "quantity",
+        "resource_metadata",
+        "unit_prices",
+        "amounts",
+        "persistence"
+      ]
+    },
+    "Completion": {
+      "type": "object",
+      "properties": {
+        "required_scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VerificationScope"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "require_positive_quantities": {
+          "type": "boolean"
+        },
+        "require_priced_resources": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "required_scopes",
+        "require_positive_quantities",
+        "require_priced_resources"
+      ],
+      "additionalProperties": false
+    },
+    "JobPlan": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": "0.1"
+        },
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "job_key": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "plan_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "baseline_ref": {
+          "$ref": "#/$defs/SnapshotRef"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "minItems": 1
+        },
+        "completion": {
+          "$ref": "#/$defs/Completion"
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          }
+        },
+        "reasoning_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "presentation": {
+          "enum": [
+            "summary",
+            "expanded"
+          ]
+        }
+      },
+      "required": [
+        "contract_version",
+        "project_id",
+        "job_key",
+        "plan_revision",
+        "baseline_ref",
+        "actions",
+        "completion",
+        "source_refs"
+      ],
+      "additionalProperties": false
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "enum": [
+            "environment",
+            "binding",
+            "version",
+            "plan",
+            "identity",
+            "operation",
+            "verification",
+            "storage",
+            "internal"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dispatch_state": {
+          "enum": [
+            "none",
+            "sent",
+            "outcome_unknown"
+          ]
+        },
+        "recovery": {
+          "enum": [
+            "read_only_retry",
+            "rebind",
+            "reconcile",
+            "business_decision",
+            "repair"
+          ]
+        },
+        "retry_allowed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "category",
+        "message",
+        "dispatch_state",
+        "recovery",
+        "retry_allowed"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "artifact_id",
+        "sha256",
+        "kind",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "Envelope": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": "0.1"
+        },
+        "request_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "observed",
+            "completed",
+            "waiting_environment",
+            "needs_business_decision",
+            "needs_reconciliation",
+            "blocked",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "data": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        },
+        "timing_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "contract_version",
+        "request_id",
+        "status",
+        "data",
+        "error",
+        "evidence",
+        "timing_ms"
+      ],
+      "additionalProperties": false
+    },
+    "EnvironmentRequest": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "$ref": "#/$defs/Identifier"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ProjectOpenRequest": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "workspace_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "create": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "library": {
+              "type": "string",
+              "minLength": 1
+            },
+            "edition": {
+              "type": "string",
+              "minLength": 1
+            },
+            "trade": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name",
+            "library",
+            "edition",
+            "trade"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "profile_id",
+        "workspace_path"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "source_path"
+          ],
+          "not": {
+            "required": [
+              "create"
+            ]
+          }
+        },
+        {
+          "required": [
+            "create"
+          ],
+          "not": {
+            "required": [
+              "source_path"
+            ]
+          }
+        }
+      ]
+    },
+    "ProjectReadRequest": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "structure",
+              "quotas",
+              "resources",
+              "prices",
+              "amounts"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "project_id",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "QuotaSearchRequest": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "library": {
+          "type": "string",
+          "minLength": 1
+        },
+        "edition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trade": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "project_id",
+        "library",
+        "edition",
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "JobIdRequest": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/Identifier"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "additionalProperties": false
+    },
+    "JobStatusRequest": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "after_event": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wait_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "additionalProperties": false
+    },
+    "CommitRequest": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "output_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_snapshot_ref": {
+          "$ref": "#/$defs/SnapshotRef"
+        }
+      },
+      "required": [
+        "project_id",
+        "output_path",
+        "expected_snapshot_ref"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceReadRequest": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "artifact_id"
+      ],
+      "additionalProperties": false
+    },
+    "SnapshotBinding": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SnapshotRef"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "from_action": {
+              "$ref": "#/$defs/Identifier"
+            },
+            "output": {
+              "enum": [
+                "budget_snapshot_ref",
+                "resource_snapshot_ref"
+              ]
+            }
+          },
+          "required": [
+            "from_action",
+            "output"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "VerificationResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "pending",
+            "not_requested",
+            "not_supported"
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        }
+      },
+      "required": [
+        "status",
+        "scope",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "Verification": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/VerificationResult"
+        },
+        "quantity": {
+          "$ref": "#/$defs/VerificationResult"
+        },
+        "resource_metadata": {
+          "$ref": "#/$defs/VerificationResult"
+        },
+        "unit_prices": {
+          "$ref": "#/$defs/VerificationResult"
+        },
+        "amounts": {
+          "$ref": "#/$defs/VerificationResult"
+        },
+        "persistence": {
+          "$ref": "#/$defs/VerificationResult"
+        },
+        "fee_tax_review": {
+          "$ref": "#/$defs/VerificationResult"
+        }
+      },
+      "required": [
+        "identity",
+        "quantity",
+        "resource_metadata",
+        "unit_prices",
+        "amounts",
+        "persistence"
+      ],
+      "additionalProperties": false
+    },
+    "Capability": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "enum": [
+            "unavailable",
+            "offline_verified",
+            "live_verified",
+            "degraded"
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "name",
+        "state",
+        "available",
+        "profile_id",
+        "evidence",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "EnvironmentData": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "compatible": {
+          "type": "boolean"
+        },
+        "interactive_desktop": {
+          "enum": [
+            "ready",
+            "locked",
+            "unavailable",
+            "unknown"
+          ]
+        },
+        "license_state": {
+          "enum": [
+            "ready",
+            "unavailable",
+            "unknown"
+          ]
+        },
+        "monitor_state": {
+          "enum": [
+            "capture_observed",
+            "process_only",
+            "not_running",
+            "unknown"
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "profile_id",
+        "compatible",
+        "interactive_desktop",
+        "license_state",
+        "monitor_state",
+        "capabilities",
+        "gaps"
+      ],
+      "additionalProperties": false
+    },
+    "ProjectData": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "session_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "workcopy_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_protected": {
+          "type": "boolean"
+        },
+        "library": {
+          "type": "string",
+          "minLength": 1
+        },
+        "edition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trade": {
+          "type": "string",
+          "minLength": 1
+        },
+        "snapshot_ref": {
+          "$ref": "#/$defs/SnapshotRef"
+        }
+      },
+      "required": [
+        "project_id",
+        "session_id",
+        "workcopy_path",
+        "source_path",
+        "source_protected",
+        "library",
+        "edition",
+        "trade",
+        "snapshot_ref"
+      ],
+      "additionalProperties": false
+    },
+    "ObservationData": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "session_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "snapshot_ref": {
+          "$ref": "#/$defs/SnapshotRef"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "total_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "returned_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "artifact": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "project_id",
+        "session_id",
+        "snapshot_ref",
+        "complete",
+        "scope",
+        "total_count",
+        "returned_count",
+        "artifact",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "Candidate": {
+      "type": "object",
+      "properties": {
+        "candidate_ref": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "quota_key": {
+          "$ref": "#/$defs/QuotaKey"
+        },
+        "description_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "candidate_ref",
+        "quota_key",
+        "description_ref"
+      ],
+      "additionalProperties": false
+    },
+    "CandidatesData": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "session_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "snapshot_ref": {
+          "$ref": "#/$defs/SnapshotRef"
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "total_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "returned_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Candidate"
+          }
+        },
+        "readiness": {
+          "enum": [
+            "model_event_and_readback",
+            "observed_stable",
+            "incomplete"
+          ]
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "project_id",
+        "session_id",
+        "snapshot_ref",
+        "query",
+        "complete",
+        "total_count",
+        "returned_count",
+        "candidates",
+        "readiness",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "ValidationData": {
+      "type": "object",
+      "properties": {
+        "plan_digest": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "action_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "executable_action_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identifier"
+          }
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Error"
+          }
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "plan_digest",
+        "valid",
+        "action_count",
+        "executable_action_ids",
+        "issues",
+        "required_capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "ActionSummary": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "line_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "state": {
+          "enum": [
+            "planned",
+            "intent_durable",
+            "dispatched",
+            "readback_verified",
+            "persistence_verified",
+            "needs_reconciliation",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "dispatch_state": {
+          "enum": [
+            "none",
+            "sent",
+            "outcome_unknown"
+          ]
+        },
+        "receipt_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        }
+      },
+      "required": [
+        "action_id",
+        "line_id",
+        "state",
+        "dispatch_state",
+        "receipt_refs"
+      ],
+      "additionalProperties": false
+    },
+    "DecisionQuestion": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identifier"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "action_ids",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "JobData": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "plan_digest": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "waiting_environment",
+            "needs_business_decision",
+            "needs_reconciliation",
+            "blocked",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "next_event": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionSummary"
+          }
+        },
+        "verification": {
+          "$ref": "#/$defs/Verification"
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DecisionQuestion"
+          }
+        },
+        "remaining_scope": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "job_id",
+        "project_id",
+        "plan_digest",
+        "state",
+        "next_event",
+        "actions",
+        "verification",
+        "questions",
+        "remaining_scope"
+      ],
+      "additionalProperties": false
+    },
+    "CommitData": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "output_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "snapshot_ref": {
+          "$ref": "#/$defs/SnapshotRef"
+        },
+        "output_artifact": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "verification": {
+          "$ref": "#/$defs/Verification"
+        }
+      },
+      "required": [
+        "project_id",
+        "output_path",
+        "snapshot_ref",
+        "output_artifact",
+        "verification"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceData": {
+      "type": "object",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "returned_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "content": {
+          "type": [
+            "object",
+            "array",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "artifact",
+        "offset",
+        "returned_count",
+        "has_more",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "GCCP7 原生桥 CLI"
+  short_description: "在已授权的广联达测试概算工程里套项、改量、删除并核对回执"
+  default_prompt: "使用 $gccp7-native-cli 只读核对当前测试工程及目标定额，整理后续命令需要的参数。"

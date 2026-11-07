@@ -1,0 +1,16 @@
+{
+  "profile_id": "gccp7-bj2025-local-session",
+  "launcher": "C:\\Program Files\\Glodon\\GCCP\\7.0-X64\\Bin\\GCCP764.exe",
+  "process_executable": "C:\\Program Files\\Glodon\\GCCP\\7.0-X64\\Construction\\2\\Bin\\GBE64.exe",
+  "library": "北京市建设工程概算消耗量标准(2025)",
+  "edition": "2025",
+  "trade": "管网",
+  "fingerprints": {
+    "C:\\Program Files\\Glodon\\GCCP\\7.0-X64\\Bin\\GCCP764.exe": "7b230a6a7b9309f9dbf8ec1f27a1818447ff60ced1e1e12c1990d041dd0e4e1d",
+    "C:\\Program Files\\Glodon\\GCCP\\7.0-X64\\Construction\\2\\Bin\\GBE64.exe": "ac7d4a69b0c8d7a17e07cb5933c95e84fff49161839e297e398521d3ec0a8019",
+    "C:\\Program Files\\Glodon\\GCCP\\7.0-X64\\Construction\\2\\Bin\\Qt5Widgets.dll": "137ddf797bc8a3a34b6edc5759838a9e7fa79fecffa59be39061038e3795dd53",
+    "C:\\Program Files\\Glodon\\GCCP\\7.0-X64\\Construction\\2\\Bin\\Qt5Gui.dll": "a9592245ac747c7c082c2d2dfd0742ff762d1b47608a2669bcf6f1bb6a3f9229",
+    "C:\\Program Files\\Glodon\\GCCP\\7.0-X64\\Construction\\2\\Bin\\Qt5Core.dll": "1113164d37145d779981771465464ade9a77a12c47a9fc2852b4579d17bc8465",
+    "C:\\Program Files\\Glodon\\GCCP\\7.0-X64\\Construction\\2\\Bin\\GLDTableView.dll": "9e813569b37cbb96906a6ba0f69836991c1fb290b761465de3d9251bf80cec17"
+  }
+}

@@ -1,0 +1,11 @@
+# GCCP7 Native CLI
+
+> Agent-oriented native operation foundation for Glodon GCCP7. Windows x64 command-line automation for scoped quota lookup, insertion, quantity updates, deletion and audited readback.
+
+面向 AI Agent 的广联达 GCCP7 智能操作底座，适用于已验证范围内的北京2025概算定额业务。
+
+- [README](README.md): Setup, toolchain, scope and usage examples.
+- [Agent command map](docs/agent-commands.md): Inputs, effects, JSON results and how to proceed.
+- [Agent Skill](.agents/skills/gccp7-native-cli/SKILL.md): Reusable GCCP7 operation instructions for AI agents.
+- [Diagnostics](docs/diagnostics.md): Read-only recovery and original command receipts.
+- [Architecture](docs/architecture.md): Native execution, safety boundaries and verified cases.

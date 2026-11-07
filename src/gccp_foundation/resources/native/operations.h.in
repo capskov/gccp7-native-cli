@@ -1,0 +1,293 @@
+// Fixed scenario only: one additional labelled 3-200 under BZ010, quantity=1.
+#include <QAction>
+#include <QAbstractButton>
+#include <QToolButton>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QTextEdit>
+#include <QComboBox>
+#include <QTabBar>
+#include <QMetaMethod>
+#include <QPersistentModelIndex>
+#include <QKeyEvent>
+static QString quotaName(){return QStringLiteral("球墨铸铁管管件安装 公称直径(mm以内) 600");}
+static QString testNote(){return QStringLiteral("POC01-20261102B-TEST 保留检查");}
+struct FlowState {
+    int row=-1;bool inserted=false,materialConfirmed=false,noteDone=false,quantityDone=false,saved=false;
+    QPointer<QWidget> editor,view;QPointer<QAbstractItemModel> editModel;
+    QPersistentModelIndex editIndex;QString editorKind;bool editorWritten=false;
+};
+static FlowState &flow(){static FlowState *s=nullptr;if(!s)s=new FlowState;return *s;}
+typedef QAbstractItemModel* (__fastcall *ModelGetter)(const void*);
+typedef QItemSelectionModel* (__fastcall *SelectionGetter)(const void*);
+static QJsonArray rowValues(QAbstractItemModel *m,QModelIndex i){QJsonArray a;for(int c=0;c<m->columnCount();++c)a.append(m->index(i.row(),c,i.parent()).data().toString());return a;}
+static bool zeroQuota(QAbstractItemModel *m,QModelIndex i){auto v=rowValues(m,i);return v.size()==13 && v[0]=="3-200" && v[2]==quotaName() && v[3]=="个" && v[6]=="0" && v[8]=="0";}
+static QWidget* expectedMaterial(){QWidget *found=nullptr;int n=0;for(auto w:QApplication::allWidgets())if(w->isWindow() && w->isVisible() && w->windowTitle()=="3-200未计价材料"){found=w;++n;}return n==1?found:nullptr;}
+static QJsonObject materialEvidence(QWidget *popup,ModelGetter get){
+    QJsonArray matches,buttons;QSet<QAbstractItemModel*> seen;
+    if(!popup)return {{"status","absent"}};
+    for(auto b:popup->findChildren<QAbstractButton*>())if(b->isVisible())buttons.append(QJsonObject{{"class",b->metaObject()->className()},{"name",b->objectName()},{"text",b->text()},{"enabled",b->isEnabled()}});
+    for(auto w:QApplication::allWidgets())if(w->isVisible() && (w==popup || popup->isAncestorOf(w)))if(auto view=w->qt_metacast("GlodonAbstractItemView")){
+        auto model=get(view);if(!model || seen.contains(model) || model->thread()!=qApp->thread())continue;seen.insert(model);
+        if(model->columnCount()>32 || model->rowCount()>100)continue;QJsonArray headers,rows;
+        for(int c=0;c<model->columnCount();++c)headers.append(model->headerData(c,Qt::Horizontal).toString());
+        for(int r=0;r<model->rowCount();++r)rows.append(rowValues(model,model->index(r,0)));
+        matches.append(QJsonObject{{"widget_class",w->metaObject()->className()},{"model_class",model->metaObject()->className()},{"headers",headers},{"rows",rows}});
+    }
+    return {{"status","present"},{"window_class",popup->metaObject()->className()},{"tables",matches},{"buttons",buttons}};
+}
+static bool editorBegin(QWidget *view,QAbstractItemModel *model,QModelIndex row,bool note,QJsonObject &out,QString &error){
+    auto &s=flow();if(s.editor || s.editorWritten || !zeroQuota(model,row)){error="editor_or_zero_quantity_guard";return false;}
+    int n=view->metaObject()->indexOfMethod("edit(QModelIndex)");if(n<0){error="native_edit_missing";return false;}auto method=view->metaObject()->method(n);
+    if(QString(method.enclosingMetaObject()->className())!="GLDGSPTableView" || method.returnType()!=QMetaType::Bool){error="native_edit_signature_changed";return false;}
+    view->window()->activateWindow();QApplication::setActiveWindow(view->window());
+    auto signature=QMetaObject::normalizedSignature("setCurrentIndex(QModelIndex)");
+    int navigation=view->metaObject()->indexOfMethod(signature);
+    if(navigation<0){error="editor_current_index_method_missing";return false;}
+    auto desired=model->index(row.row(),note?12:6,row.parent());
+    auto navigationMethod=view->metaObject()->method(navigation);
+    if(QString(navigationMethod.enclosingMetaObject()->className())!="GSPTableView" ||
+       !navigationMethod.invoke(view,Qt::DirectConnection,Q_ARG(QModelIndex,desired))){error="editor_current_column_not_set";return false;}
+    view->setFocus(Qt::OtherFocusReason);
+    auto cell=model->index(row.row(),note?12:6,row.parent());bool opened=false;
+    if(!method.invoke(view,Qt::DirectConnection,Q_RETURN_ARG(bool,opened),Q_ARG(QModelIndex,cell)) || !opened){error="native_editor_not_opened";return false;}
+    auto editor=QApplication::focusWidget();QString text,kind;
+    for(int depth=0;editor && depth<4;++depth,editor=editor->parentWidget()){
+        if(!view->isAncestorOf(editor))break;
+        if(auto e=qobject_cast<QLineEdit*>(editor)){text=e->text();kind="line";break;}
+        if(auto e=qobject_cast<QPlainTextEdit*>(editor)){text=e->toPlainText();kind="plain";break;}
+        if(auto e=qobject_cast<QTextEdit*>(editor)){text=e->toPlainText();kind="text";break;}
+    }
+    out["focus_class"]=QApplication::focusWidget()?QApplication::focusWidget()->metaObject()->className():"none";
+    if(!editor || kind.isEmpty()){error="unverified_editor_type_or_ancestry";return false;}
+    if(!(note?text.isEmpty():QStringList{"","0","0.00"}.contains(text))){error="editor_initial_value_changed";return false;}
+    s.editor=editor;s.view=view;s.editModel=model;s.editIndex=cell;s.editorKind=note?"note":"quantity";
+    out["editor_class"]=editor->metaObject()->className();out["editor_initial_value"]=text;out["editor_opened"]=true;return true;
+}
+static bool editorCommit(bool note,QJsonObject &out,QString &error){
+    auto &s=flow();if(!s.editor || !s.view || !s.editModel || !s.editIndex.isValid() || s.editorWritten || s.editorKind!=(note?"note":"quantity") || !zeroQuota(s.editModel,s.editIndex)){
+        error="editor_commit_lifetime_guard";return false;}
+    int n=s.view->metaObject()->indexOfMethod("commitDataAndCloseEditor()");if(n<0){error="native_commit_missing";return false;}auto method=s.view->metaObject()->method(n);
+    if(QString(method.enclosingMetaObject()->className())!="GlodonAbstractItemView" || method.returnType()!=QMetaType::Bool){error="native_commit_signature_changed";return false;}
+    const QString value=note?testNote():QStringLiteral("1");s.editorWritten=true;
+    if(auto e=qobject_cast<QLineEdit*>(s.editor.data()))e->setText(value);
+    else if(auto e=qobject_cast<QPlainTextEdit*>(s.editor.data()))e->setPlainText(value);
+    else if(auto e=qobject_cast<QTextEdit*>(s.editor.data()))e->setPlainText(value);
+    else {error="editor_class_changed_after_intent";return false;}
+    bool committed=false;const bool invoked=method.invoke(s.view,Qt::DirectConnection,Q_RETURN_ARG(bool,committed));
+    out["commit_returned"]=committed;out["value_dispatches"]=1;
+    if(!invoked || !committed){error="native_commit_outcome_unknown";return false;}
+    s.editor=nullptr;s.view=nullptr;s.editModel=nullptr;s.editIndex=QPersistentModelIndex();s.editorWritten=false;
+    if(note)s.noteDone=true;else s.quantityDone=true;return true;
+}
+static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &error){
+    auto op=req["operation"].toString();auto &s=flow();
+    if(!QStringList{"inspect","prepare","save","open","resources.return.quota","search","select","insert","material.peek","material.confirm","close","bind.inserted","name.set","quantity.normal.one","resources.key.up"}.contains(op)){error="operation_not_allowed";return false;}
+    auto mod=GetModuleHandleW(L"GLDTableView.dll");auto mg=reinterpret_cast<ModelGetter>(GetProcAddress(mod,"?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
+    auto sg=reinterpret_cast<SelectionGetter>(GetProcAddress(mod,"?selectionModel@GlodonAbstractItemView@@QEBAPEAVGLDItemSelectionModel@@XZ"));auto cg=GetProcAddress(mod,"?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
+    if(!mg || !sg || !cg){error="fixed_getter_missing";return false;}
+    auto popup=expectedMaterial();
+    if(op.startsWith("material.")){
+        auto evidence=materialEvidence(popup,mg);out["material"]=evidence;
+        if(op=="material.peek")return true;
+        if(!popup || !s.inserted || s.materialConfirmed){error="expected_material_window_not_active";return false;}
+        auto tables=evidence["tables"].toArray();int matching=0;
+        for(auto table:tables){auto t=table.toObject();auto headers=t["headers"].toArray();QStringList h;for(auto v:headers)h.append(v.toString());auto rows=t["rows"].toArray();
+            int code=h.indexOf("编码"),name=h.indexOf("名称"),unit=h.indexOf("单位"),content=h.indexOf("含量"),price=h.indexOf("市场价");
+            if(code<0 || name<0 || unit<0 || content<0 || price<0 || rows.size()<1)continue;auto v=rows[0].toArray();
+            bool ok=false;double p=v[price].toString().toDouble(&ok);
+            if(!v[code].toString().isEmpty() && !v[name].toString().isEmpty() && !v[unit].toString().isEmpty() && ok && p>=0)++matching;
+        }
+        if(matching!=1){error="material_identity_or_composition_unverified";return false;}
+        QAbstractButton *button=nullptr;int buttons=0;for(auto b:popup->findChildren<QAbstractButton*>()){
+            auto text=b->text();text.remove('&');text.remove(' ');if(b->isVisible() && b->isEnabled() && text=="确定"){button=b;++buttons;}}
+        if(buttons!=1){error="material_confirm_button_not_unique";return false;}
+        s.materialConfirmed=true;button->click();out["material_confirmation_dispatched"]=true;return true;
+    }
+    if(popup || QApplication::activeModalWidget()){error="unexpected_or_unfinished_modal";return false;}
+    if(op=="note.commit" || op=="quantity.commit")return editorCommit(op=="note.commit",out,error);
+    QWidget *budget=nullptr,*candidate=nullptr,*query=nullptr;QAbstractItemModel *bm=nullptr,*cm=nullptr;int nb=0,nc=0,nq=0;
+    QSet<QAction*> actions;QSet<QAbstractItemModel*> models;QAction *queryAction=nullptr,*insertAction=nullptr,*saveAction=nullptr;int qa=0,ia=0,sa=0;
+    for(auto w:QApplication::allWidgets()){
+        for(auto a:w->actions())actions.insert(a);if(auto b=qobject_cast<QToolButton*>(w))if(b->defaultAction())actions.insert(b->defaultAction());
+        if(w->isVisible() && w->inherits("GBQNormDBQueryFrame")){query=w;++nq;}
+        if(!w->isVisible() || (!w->inherits("GTPGSPTableView") && !w->inherits("GBQBaseGSPTableView")))continue;auto view=w->qt_metacast("GlodonAbstractItemView");if(!view)continue;auto m=mg(view);
+        if(!m || models.contains(m) || m->thread()!=qApp->thread())continue;models.insert(m);
+        if(m->columnCount()==13 && m->headerData(4,Qt::Horizontal).toString()=="工程量表达式"){budget=w;bm=m;++nb;}
+        if(m->columnCount()==5 && m->headerData(4,Qt::Horizontal).toString()=="专业"){candidate=w;cm=m;++nc;}
+    }
+    for(auto a:qApp->findChildren<QAction*>())actions.insert(a);
+    for(auto w:QApplication::topLevelWidgets())for(auto a:w->findChildren<QAction*>())actions.insert(a);
+    QJsonArray saveCatalog;QAction *quick=nullptr;int quickCount=0;
+    for(auto a:actions)if(a->thread()==qApp->thread()){
+        if(a->objectName()=="ToolbarSave" || a->objectName()=="QuickAccessSave"){
+            saveCatalog.append(QJsonObject{{"name",a->objectName()},{"text",a->text()},{"enabled",a->isEnabled()},{"shortcut",a->shortcut().toString()}});
+            if(a->objectName()=="QuickAccessSave" && a->text()=="保存" && a->isEnabled()){quick=a;++quickCount;}
+        }
+    }
+    out["save_action_catalog"]=saveCatalog;
+    for(auto a:actions)if(a->isEnabled() && a->thread()==qApp->thread()){
+        if(a->objectName()=="BQ_QueryOfPopMenu" && a->text()=="查询" && a->shortcut().toString()=="F3"){queryAction=a;++qa;}
+        if(a->objectName()=="InsertNorm" && a->text()=="插入子目(&I)"){insertAction=a;++ia;}
+        if(a->objectName()=="ToolbarSave" && a->text()=="保存"){saveAction=a;++sa;}
+    }
+    if(quickCount==1){saveAction=quick;sa=1;}else if(quickCount>1){error="quick_save_not_unique";return false;}
+    if(op=="inspect")return true;
+    if(nb!=1 || !bm || bm->rowCount()!=1){error="budget_model_not_unique";return false;}
+    auto project=bm->index(0,0);QModelIndex parent;int parents=0;
+    if(bm->rowCount(project)>100){error="division_bound";return false;}
+    for(int r=0;r<bm->rowCount(project);++r){auto i=bm->index(r,0,project);auto v=rowValues(bm,i);if(v[1]=="部" && v[2]=="管件安装" && v[12]=="BZ010"){parent=i;++parents;}}
+    if(parents!=1 || bm->rowCount(parent)>100){error="parent_not_unique";return false;}
+    auto bv=budget->qt_metacast("GlodonAbstractItemView");
+    if(op=="resources.return.quota"){
+        QModelIndex wanted;int matches=0;for(int r=0;r<bm->rowCount(parent);++r){auto i=bm->index(r,0,parent);auto v=rowValues(bm,i);if(v[0]=="3-200" && v[2]==quotaName()+" [CLI v0.1测试]" && v[6]=="1"){wanted=i;++matches;}}
+        if(matches!=1){error="quantity_one_target_not_unique";return false;}
+        for(int n=0;n<4;++n){auto cur=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));if(cur.sibling(cur.row(),0)==wanted){out["normal_up_count"]=n;return true;}
+            bool child=false;for(auto i=cur.parent();i.isValid();i=i.parent())if(i==wanted)child=true;
+            if(!child){error="current_row_not_target_descendant";return false;}
+            budget->setFocus(Qt::OtherFocusReason);QKeyEvent up(QEvent::KeyPress,Qt::Key_Up,Qt::NoModifier);QApplication::sendEvent(budget,&up);
+        }
+        error="normal_up_bound_reached";return false;
+    }
+    if(op=="prepare"){
+        if(s.row>=0){error="prepare_context_already_started_or_query_visible";return false;}int blanks=0;
+        if(bm->rowCount(parent)!=6 || !rowValues(bm,bm->index(5,0,parent))[0].toString().isEmpty()){error="reviewed_parent_context_changed";return false;}
+        s.row=5;
+        auto target=bm->index(s.row,0,parent);
+        int n=budget->metaObject()->indexOfMethod("setCurrentIndex(QModelIndex)");if(n<0){error="navigation_missing";return false;}auto method=budget->metaObject()->method(n);
+        if(QString(method.enclosingMetaObject()->className())!="GSPTableView" || !method.invoke(budget,Qt::DirectConnection,Q_ARG(QModelIndex,target))){error="navigation_not_verified";return false;}
+        budget->window()->activateWindow();budget->setFocus(Qt::OtherFocusReason);
+        out["target_child_row"]=s.row;out["application_selection_changed"]=true;return true;
+    }
+    if(op=="resume.done"){
+        if(s.row>=0 || nq || req["outer_intent_id"].toString().size()!=39 || bm->rowCount(parent)<5){error="resume_done_guard";return false;}
+        auto i=bm->index(5,0,parent);auto v=rowValues(bm,i);
+        if(v[0]!="3-200" || v[2]!=quotaName()+" [CLI v0.1测试]" || v[3]!="个" || (v[6]!="1" && v[6]!="0") || (v[8]!="197.23" && v[8]!="0")){
+            error="resume_done_business_state_mismatch";return false;}
+        s.row=5;s.inserted=s.materialConfirmed=s.noteDone=true;s.quantityDone=v[6]=="1";
+        out["resumed_save_only_without_business_redispatch"]=true;return true;
+    }
+    if(op=="resume"){
+        if(s.row>=0 || nq || req["outer_intent_id"].toString().size()!=39 || bm->rowCount(parent)<5){error="resume_guard";return false;}
+        auto i=bm->index(5,0,parent);auto v=rowValues(bm,i);
+        if(v[0]!="3-200" || (v[2]!=quotaName() && v[2]!=quotaName()+" [CLI v0.1测试]") || v[3]!="个" || v[6]!="0" || v[8]!="0" || (v[12]!="" && v[12]!=testNote())){
+            error="resume_inserted_identity_not_verified";return false;}
+        s.row=5;s.inserted=true;s.materialConfirmed=true;s.noteDone=v[2]==quotaName()+" [CLI v0.1测试]";
+        out["resumed_without_insert"]=true;out["target_values"]=v;return true;
+    }
+    if(op=="bind.inserted"){
+        int found=0;for(int r=0;r<bm->rowCount(parent);++r){auto v=rowValues(bm,bm->index(r,0,parent));if(v[0]=="3-200" && v[2]==quotaName() && v[6]=="0"){s.row=r;++found;}}
+        if(found!=1 || !s.inserted){error="inserted_identity_not_unique";return false;}out["bound_inserted_row"]=s.row;return true;
+    }
+    if(s.row<0 || s.row>=bm->rowCount(parent)){error="bound_target_missing";return false;}auto target=bm->index(s.row,0,parent);auto targetValues=rowValues(bm,target);
+    out["target_values"]=targetValues;out["target_child_row"]=s.row;
+    if(op=="close"){
+        if(nq!=1){error="visible_query_not_unique";return false;}auto buttons=query->window()->findChildren<QAbstractButton*>("m_pQueryClose");
+        if(buttons.size()!=1 || !buttons[0]->isVisible()){error="query_close_not_unique";return false;}buttons[0]->click();return true;
+    }
+    if(op=="note.begin" || op=="quantity.begin"){
+        if(nq || !s.inserted || (op=="quantity.begin" && !s.noteDone)){error="editor_phase_precondition";return false;}
+        return editorBegin(budget,bm,target,op=="note.begin",out,error);
+    }
+    if(op=="editor.inspect"){
+        QJsonArray editors;
+        for(auto w:budget->findChildren<QWidget*>())if(w->isVisible()){
+            QString text;bool isEditor=false;
+            if(auto e=qobject_cast<QLineEdit*>(w)){text=e->text();isEditor=true;}
+            else if(auto e=qobject_cast<QPlainTextEdit*>(w)){text=e->toPlainText();isEditor=true;}
+            else if(auto e=qobject_cast<QTextEdit*>(w)){text=e->toPlainText();isEditor=true;}
+            if(isEditor)editors.append(QJsonObject{{"class",w->metaObject()->className()},{"name",w->objectName()},{"text",text},{"focus",w->hasFocus()}});
+        }
+        out["visible_budget_editors"]=editors;return true;
+    }
+    if(op=="quantity.normal.zero" || op=="quantity.normal.one"){
+        static int phase=0;const bool zero=op=="quantity.normal.zero";
+        if((zero && phase!=0) || (!zero && phase!=0 && phase!=1) || targetValues[0]!="3-200" || targetValues[2]!=quotaName()+" [CLI v0.1测试]" ||
+           targetValues[3]!="个" || targetValues[6]!=(zero?QStringLiteral("1"):QStringLiteral("0"))){error="normal_quantity_phase_guard";return false;}
+        auto cell=bm->index(s.row,6,parent);out["quantity_cell_flags"]=int(bm->flags(cell));
+        if(!(bm->flags(cell)&Qt::ItemIsEditable)){error="normal_quantity_not_editable";return false;}
+        budget->window()->activateWindow();QApplication::setActiveWindow(budget->window());
+        int nav=budget->metaObject()->indexOfMethod("setCurrentIndex(QModelIndex)");
+        if(nav<0 || !budget->metaObject()->method(nav).invoke(budget,Qt::DirectConnection,Q_ARG(QModelIndex,cell))){error="normal_quantity_navigation";return false;}
+        budget->setFocus(Qt::OtherFocusReason);int edit=budget->metaObject()->indexOfMethod("edit(QModelIndex)");bool opened=false;
+        if(edit<0 || !budget->metaObject()->method(edit).invoke(budget,Qt::DirectConnection,Q_RETURN_ARG(bool,opened),Q_ARG(QModelIndex,cell)) || !opened){error="normal_quantity_editor_not_opened";return false;}
+        QPointer<QWidget> editor=QApplication::focusWidget();QString kind,initial;
+        for(int d=0;editor && d<4;++d){
+            if(!budget->isAncestorOf(editor))break;
+            if(auto e=qobject_cast<QLineEdit*>(editor.data())){kind="line";initial=e->text();break;}
+            if(auto e=qobject_cast<QPlainTextEdit*>(editor.data())){kind="plain";initial=e->toPlainText();break;}
+            if(auto e=qobject_cast<QTextEdit*>(editor.data())){kind="text";initial=e->toPlainText();break;}
+            editor=editor->parentWidget();
+        }
+        out["editor_initial_text"]=initial;
+        if(!editor || kind.isEmpty()){error="normal_quantity_editor_type";return false;}
+        bool numeric=false;double initialNumber=initial.toDouble(&numeric);
+        if(!(numeric && initialNumber==(zero?1:0)) && !(!zero && initial.isEmpty())){error="normal_quantity_editor_initial_value";return false;}
+        phase=zero?1:2;s.quantityDone=!zero;QString value=zero?QStringLiteral("0"):QStringLiteral("1");
+        if(auto e=qobject_cast<QLineEdit*>(editor.data()))e->setText(value);
+        else if(auto e=qobject_cast<QPlainTextEdit*>(editor.data()))e->setPlainText(value);
+        else if(auto e=qobject_cast<QTextEdit*>(editor.data()))e->setPlainText(value);
+        QKeyEvent confirm(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);
+        out["normal_return_event_delivered"]=QApplication::sendEvent(editor,&confirm);
+        out["qt_confirmation_events"]=1;out["quantity_field_write_dispatches"]=1;
+        return true;
+    }
+    if(op=="name.set" || op=="quantity.set"){
+        const bool name=op=="name.set";
+        if(!s.inserted || nq || targetValues[0]!="3-200" || targetValues[3]!="个" || targetValues[6]!="0" ||
+           (targetValues[2]!=quotaName() && targetValues[2]!=quotaName()+" [CLI v0.1测试]") || (!name && !s.noteDone)){
+            error="fixed_model_field_precondition";return false;}
+        const int column=name?2:4;auto cell=bm->index(s.row,column,parent);const int flags=int(bm->flags(cell));
+        out["field_flags"]=flags;out["field_header"]=bm->headerData(column,Qt::Horizontal).toString();out["before_edit_role"]=QJsonValue::fromVariant(cell.data(Qt::EditRole));
+        if(!(flags & int(Qt::ItemIsEditable))){error="model_field_not_editable";return false;}
+        if(name && s.noteDone){out["already_labelled"]=true;return true;}
+        if(!name && s.quantityDone){error="quantity_once_guard";return false;}
+        const QString value=name?quotaName()+" [CLI v0.1测试]":QStringLiteral("1");
+        if(name)s.noteDone=true;else s.quantityDone=true;
+        bool accepted=bm->setData(cell,QVariant(value),Qt::EditRole);
+        out["model_set_data_returned"]=accepted;out["field_write_dispatches"]=1;out["immediate_values"]=rowValues(bm,target);
+        if(!accepted){error="model_field_write_not_accepted";return false;}return true;
+    }
+    if(op=="resources.key.up"){
+        auto cur=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));
+        if(cur.parent()!=parent || cur.row()!=s.row+1 || targetValues[0]!="3-200" || targetValues[6]!="1"){error="normal_up_context_guard";return false;}
+        budget->setFocus(Qt::OtherFocusReason);QKeyEvent up(QEvent::KeyPress,Qt::Key_Up,Qt::NoModifier);
+        out["normal_up_delivered"]=QApplication::sendEvent(budget,&up);return true;
+    }
+    if(op=="resources.show"){
+        auto row=bm->index(s.row,0,parent);int nav=budget->metaObject()->indexOfMethod("setCurrentIndex(QModelIndex)");
+        if(nav<0 || !budget->metaObject()->method(nav).invoke(budget,Qt::DirectConnection,Q_ARG(QModelIndex,row))){error="resource_owner_navigation_failed";return false;}
+        QTabBar *bar=nullptr;int tab=-1,matches=0;
+        for(auto w:QApplication::allWidgets())if(auto b=qobject_cast<QTabBar*>(w))if(b->isVisible())for(int i=0;i<b->count();++i)
+            if(b->tabText(i)=="工料机显示"){bar=b;tab=i;++matches;}
+        if(matches!=1){error="resource_tab_not_unique";return false;}bar->setCurrentIndex(tab);return true;
+    }
+    if(op=="save"){
+        if(s.saved || !s.noteDone || !s.quantityDone || sa!=1 || targetValues[6]!="1" || targetValues[2]!=quotaName()+" [CLI v0.1测试]"){
+            error="save_preconditions";return false;}
+        out["save_action_name"]=saveAction->objectName();
+        s.saved=true;out["save_queued"]=QMetaObject::invokeMethod(saveAction,"trigger",Qt::QueuedConnection);return out["save_queued"].toBool();
+    }
+    auto current=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));
+    if(current.sibling(current.row(),0)!=target || !targetValues[0].toString().isEmpty()){
+        error="blank_budget_context_changed";return false;}
+    if(op=="open"){if(nq || qa!=1){error="query_action_not_unique";return false;}queryAction->trigger();return true;}
+    if(nq!=1){error="query_not_visible";return false;}int libs=0;QString library;
+    for(auto w:QApplication::allWidgets())if(w->isVisible() && w->inherits("GBQNormDBComboBox"))if(auto c=qobject_cast<QComboBox*>(w)){library=c->currentText();++libs;}
+    if(libs!=1 || library!="北京市建设工程概算消耗量标准(2025)"){error="library_mismatch";return false;}
+    if(op=="search"){
+        QList<QLineEdit*> edits;for(auto e:query->findChildren<QLineEdit*>())if(e->isVisible() && e->inherits("GLDHintLineEdit"))edits.append(e);
+        if(edits.size()!=1){error="search_editor_not_unique";return false;}edits[0]->setText("3-200");return true;
+    }
+    if(nc!=1 || !cm || cm->rowCount()>100){error="candidate_model_not_unique";return false;}QModelIndex quota;int found=0;
+    for(int r=0;r<cm->rowCount();++r){auto i=cm->index(r,0);auto v=rowValues(cm,i);if(v[0]=="3-200" && v[1]==quotaName() && v[2]=="个" && v[4]=="管网"){quota=i;++found;}}
+    if(found!=1){error="full_candidate_not_unique";return false;}auto cv=candidate->qt_metacast("GlodonAbstractItemView");auto selection=sg(cv);
+    if(!selection || selection->model()!=cm || selection->thread()!=qApp->thread()){error="selection_not_verified";return false;}
+    if(op=="select"){selection->setCurrentIndex(quota,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);out["application_selection_changed"]=true;return true;}
+    if(op=="insert"){
+        if(s.inserted || ia!=1 || selection->selectedRows().size()!=1 || selection->selectedRows()[0]!=quota || req["outer_intent_id"].toString().size()!=39){error="insert_once_or_selection_guard";return false;}
+        s.inserted=true;out["native_insert_queued"]=QMetaObject::invokeMethod(insertAction,"trigger",Qt::QueuedConnection);
+        out["business_dispatches"]=out["native_insert_queued"].toBool()?1:0;return out["native_insert_queued"].toBool();
+    }
+    error="unhandled_operation";return false;
+}

@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Session-pinned Qt/GLD observation and allowlisted native business operations.
+#define NOMINMAX
+#include <windows.h>
+#include <QApplication>
+#include <QWidget>
+#include <QAbstractItemModel>
+#include <QPointer>
+#include <QThread>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QFile>
+#include <QSaveFile>
+#include <QDateTime>
+#include <QCryptographicHash>
+#include <QSet>
+#include <functional>
+#include "export_current_index.h"
+#include "current_selection.h"
+static LONG busy=0,captures=0;
+static DWORD entryThread=0;
+static QString root(){return QStringLiteral("__IPC_DIRECTORY__");}
+#include "operations.h"
+static void capture(){
+    struct Reset {~Reset(){InterlockedExchange(&busy,0);}} reset;
+    QJsonObject out{{"schema","poc01-native-one-command-v1"},{"pid",double(GetCurrentProcessId())},
+        {"callback_thread_id",double(GetCurrentThreadId())},{"entry_thread_id",double(entryThread)},
+        {"business_dispatches",0},{"application_selection_changed",false},{"gammaray_required",false},
+        {"callback_on_app_thread",qApp && QThread::currentThread()==qApp->thread()},{"qt_version",qVersion()}};
+    QFile file(root()+"request.json");if(!file.open(QIODevice::ReadOnly) || file.size()>48384)return;
+    auto req=QJsonDocument::fromJson(file.readAll()).object();
+    FILETIME c,e,k,u;if(!GetProcessTimes(GetCurrentProcess(),&c,&e,&k,&u))return;
+    auto birth=QString::number((quint64(c.dwHighDateTime)<<32)|c.dwLowDateTime);
+    auto nonce=req["nonce"].toString();auto now=QDateTime::currentMSecsSinceEpoch();
+    if(!qApp || QThread::currentThread()!=qApp->thread() || QString(qVersion())!="5.9.9" ||
+       req["pid"].toDouble()!=GetCurrentProcessId() || req["created_filetime"].toString()!=birth ||
+       nonce.size()!=32 ||
+       req["expires_ms"].toDouble()<=now || req["expires_ms"].toDouble()>now+(req["operation"].toString()=="inspect"?600000:120000))return;
+    for(const auto ch:nonce)if(!QStringLiteral("0123456789abcdef").contains(ch))return;
+    auto pins=req["fingerprints"].toObject();if(pins.size()!=6)return;
+    for(auto it=pins.begin();it!=pins.end();++it){QFile f(it.key());if(!f.open(QIODevice::ReadOnly) ||
+        QCryptographicHash::hash(f.readAll(),QCryptographicHash::Sha256).toHex()!=it.value().toString().toLatin1())return;}
+    bool title=false;for(auto w:QApplication::topLevelWidgets())if(w->windowTitle()==req["window_title"].toString())title=true;
+    if(!title)return;
+    out["nonce"]=nonce;out["created_filetime"]=birth;out["started_ms"]=double(now);
+    QString error;
+    if(req["command_id"].toString()!="__COMMAND_ID__")error="command_id_not_allowlisted";
+    const QString op=req["operation"].toString();
+    const bool mutation=QStringList{"insert","material.confirm","note.commit","quantity.commit","name.set","quantity.set","quantity.normal.zero","quantity.normal.one","save"}.contains(op);
+    if(error.isEmpty() && mutation){
+        if(req["outer_intent_id"].toString().size()!=39)error="owned_durable_intent_required";
+        else {
+            const QString intentPath=root()+nonce+".native.intent";
+            HANDLE f=CreateFileW(reinterpret_cast<LPCWSTR>(intentPath.utf16()),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+            if(f==INVALID_HANDLE_VALUE)error="native_intent_exists_no_replay";
+            else {auto bytes=QJsonDocument(req).toJson();DWORD n=0;bool durable=WriteFile(f,bytes.constData(),DWORD(bytes.size()),&n,nullptr) && n==DWORD(bytes.size()) && FlushFileBuffers(f);CloseHandle(f);if(!durable)error="native_intent_not_durable";}
+        }
+    }
+    if(error.isEmpty())nativeOperation(req,out,error);
+    QJsonArray tables;QSet<QAbstractItemModel*> seen;
+    auto mod=GetModuleHandleW(L"GLDTableView.dll");
+    auto mg=GetProcAddress(mod,"?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ");
+    auto cg=GetProcAddress(mod,"?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
+    typedef QAbstractItemModel* (__fastcall *ModelGetter)(const void*);
+    auto getter=reinterpret_cast<ModelGetter>(mg);
+    if(!mg || !cg)error="pinned_getter_export_missing";
+    if(error.isEmpty() && req["operation"].toString()=="inspect")for(auto w:QApplication::allWidgets()){
+        if(!w->isVisible())continue;
+        auto v=w->qt_metacast("GlodonAbstractItemView");if(!v)continue;
+        QPointer<QAbstractItemModel> m=getter(v);if(!m || seen.contains(m))continue;
+        if(m->thread()!=qApp->thread() || seen.size()>=8){error="thread_or_table_bound_rejected";break;}
+        seen.insert(m);const int nc=m->columnCount();if(nc<1 || nc>32){error="column_bound_rejected";break;}
+        QJsonArray headers,rows;for(int c=0;c<nc;++c)headers.append(m->headerData(c,Qt::Horizontal).toString());
+        bool complete=true;
+        std::function<void(QModelIndex,QString,int)> walk=[&](QModelIndex p,QString path,int depth){
+            if(!m || depth>20 || rows.size()>500 || m->rowCount(p)>500){complete=false;return;}
+            const int nr=m->rowCount(p);
+            for(int r=0;r<nr && complete;++r){
+                if(rows.size()>=500){complete=false;return;}
+                if(QDateTime::currentMSecsSinceEpoch()-now>2000){complete=false;return;}
+                const auto idx=m->index(r,0,p);QJsonArray values;
+                for(int c=0;c<nc;++c)values.append(m->index(r,c,p).data(Qt::DisplayRole).toString());
+                const QString rp=path+"/"+QString::number(r);
+                rows.append(QJsonObject{{"depth",depth},{"row_path_session_only",rp},{"values",values}});
+                if(m->hasChildren(idx))walk(idx,rp,depth+1);
+            }
+            if(m->rowCount(p)!=nr)complete=false;
+        };
+        const int rootRows=m->rowCount();walk({},"",0);
+        auto index=readPinnedCurrentIndex(v,reinterpret_cast<const void*>(cg));
+        auto current=currentIndexEvidence(m,index);
+        if(getter(v)!=m || m->rowCount()!=rootRows || readPinnedCurrentIndex(v,reinterpret_cast<const void*>(cg))!=index)complete=false;
+        tables.append(QJsonObject{{"model_class",m->metaObject()->className()},
+            {"model_id_session_only",QString::number(quintptr(m.data()))},
+            {"widget_class",w->metaObject()->className()},{"widget_id_session_only",QString::number(quintptr(w))},
+            {"root_rows",rootRows},{"headers",headers},{"rows",rows},{"complete",complete},
+            {"current",current}});
+    }
+    out["tables"]=tables;out["status"]=error.isEmpty()?"observed":"blocked";out["error"]=error;
+    out["elapsed_ms"]=double(QDateTime::currentMSecsSinceEpoch()-now);
+    QSaveFile result(root()+nonce+".json");if(result.open(QIODevice::WriteOnly)){result.write(QJsonDocument(out).toJson());result.commit();}
+    InterlockedExchange(&busy,0);
+}
+extern "C" __declspec(dllexport) DWORD WINAPI GccpPoc01Execute(LPVOID parameter){
+    if(parameter || InterlockedCompareExchange(&busy,1,0)!=0)return 2;
+    if(InterlockedIncrement(&captures)>48)return 6;
+    entryThread=GetCurrentThreadId();if(!QCoreApplication::instance())return 3;
+    auto gate=new QObject();
+    QObject::connect(gate,&QObject::destroyed,QCoreApplication::instance(),[](QObject*){capture();},Qt::QueuedConnection);
+    gate->moveToThread(QCoreApplication::instance()->thread());
+    if(gate->thread()!=QCoreApplication::instance()->thread())return 4;
+    return QMetaObject::invokeMethod(gate,"deleteLater",Qt::QueuedConnection)?1:5;
+}
+BOOL WINAPI DllMain(HINSTANCE,DWORD,LPVOID){return TRUE;}

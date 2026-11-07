@@ -1,0 +1,126 @@
+from pathlib import Path
+from dataclasses import asdict
+import json,time,uuid,sys,zipfile
+from bridge_client_internal_v01_q import NativeBridge,ROOT,COMMAND,PROFILE,write_new
+from gccp_foundation.application.native_worker_support import Ledger,SessionManager,WindowsDesktop,RuntimeProfile,Cancellation,table,rows,snap,file_sha256,execution_lock
+from gccp_foundation.application.ports import SessionContext,OperationContext,Observation,DispatchReceipt
+from gccp_foundation.domain.errors import DispatchState
+from gccp_foundation.domain.contracts import load_job_plan
+NAME='球墨铸铁管管件安装 公称直径(mm以内) 600'
+def main():
+ s=Ledger(STATE);b=None;result=dict(command_id=COMMAND,save_dispatches=0,mouse_keyboard_inputs=0)
+ try:
+  if (ROOT/'internal-v01-q-verified-result.json').exists():
+   verified=json.loads((ROOT/'internal-v01-q-verified-result.json').read_text(encoding='utf-8'))
+   assert all(s.action_state(verified['job_id'],a)=='readback_verified' for a in ('insert','quantity'))
+   from bridge_client_internal_v01_q import NativeBridge as ReadbackBridge
+   fresh=ReadbackBridge().call('inspect',timeout=90)
+   quotas=[r for r in table(fresh,'工程量表达式')['rows'] if r['values'][0]=='3-200' and r['values'][2]==verified['quota_name']]
+   assert len(quotas)==1 and quotas[0]['values'][6]=='1','Existing command result changed; no redispatch'
+   assert not s.load_pending(PROJECT)
+   print(json.dumps({**verified,'idempotent_reentry':True,'new_business_dispatches':0},ensure_ascii=False,indent=2));return
+  if (ROOT/'internal-v01-q-result.json').exists():
+   print((ROOT/'internal-v01-q-result.json').read_text(encoding='utf-8'));return
+  manager=SessionManager(s,WindowsDesktop(),RuntimeProfile.load(PROFILE));row=s.db.execute('select * from projects where project_id=?',(PROJECT,)).fetchone();meta=json.loads(row['metadata']);ctx=SessionContext(**meta['session'])
+  assert not s.load_pending(PROJECT) and not meta['dirty']
+  b=NativeBridge();base=b.call('inspect',timeout=90);budget=table(base,'工程量表达式');assert len(budget['rows'])==71
+  assert not any(r['values'][0]=='3-200' for r in budget['rows'])
+  manager.validate_session(ctx)
+  if row['owner']:
+   assert row['owner']==EXPECTED_OWNER
+   assert all(s.action_state(row['owner'],a)=='readback_verified' for a in ('insert','quantity'))
+   with s._transaction():s._event(row['owner'],'readback_phase_retained_next_user_authorized_test',dict(new_command_id=COMMAND,previous_business_result_preserved=True,no_save=True))
+   s.cancel(row['owner'])
+  key=dict(library='北京市建设工程概算消耗量标准(2025)',edition='2025',trade='管网',code='3-200',name=NAME,unit='个',chapter=None,vendor_id=None)
+  plan=load_job_plan(dict(contract_version='0.1',project_id=PROJECT,job_key=COMMAND,plan_revision=1,baseline_ref=asdict(snap(budget)),actions=[dict(action_id='insert',line_id='poc01.new.3200',kind='ensure_quota',depends_on=[],payload=dict(candidate_ref='candidate.3200',quota_key=key,parent_ref='division.'+PARENT_ID,quantity=dict(value='0',unit='个'),source_refs=['user.new.test'])),dict(action_id='quantity',line_id='poc01.new.3200',kind='set_quantity',depends_on=['insert'],payload=dict(quantity=dict(value='1',unit='个'),expected_before=dict(from_action='insert',output='budget_snapshot_ref'),source_refs=['user.new.test']))],completion=dict(required_scopes=['identity','quantity','amounts'],require_positive_quantities=True,require_priced_resources=False),source_refs=[dict(id='user.new.test',kind='user_statement',locator='Operator requested quota-run on the bound workcopy')],presentation='summary'))
+  job=s.submit(plan);s.claim_project(PROJECT,job['job_id']);result['job_id']=job['job_id']
+  assert all(s.action_state(job['job_id'],a)=='planned' for a in ('insert','quantity'))
+  if not (ROOT/'internal-v01-q-plan.json').exists():write_new(ROOT/'internal-v01-q-plan.json',dict(plan=plan.to_dict(),baseline=base,session=asdict(ctx)))
+  with execution_lock(STATE,ctx.project_file_id):
+   b.call('prepare',timeout=90);b.call('open',timeout=90);b.call('search',timeout=90)
+   for wait in range(16):
+    candidates=b.call('inspect',timeout=90)
+    matched=[r for t in candidates['tables'] if len(t['headers'])==5 for r in t['rows'] if r['values'][0]=='3-200' and r['values'][1]==NAME and r['values'][2]=='个' and r['values'][4]=='管网']
+    if len(matched)==1:break
+    time.sleep(.5)
+   else:raise RuntimeError('Full asynchronous candidate not ready; no dispatch')
+   b.call('select',timeout=90)
+   pre=s.put_evidence(PROJECT,ctx.session_id,'new_quota_preflight',base)
+   opctx=OperationContext(ctx,snap(budget),time.monotonic()+120,Cancellation())
+   intent=s.begin_intent(job['job_id'],plan.actions[0],opctx,(pre,));meta=manager.validate_session(ctx);meta['dirty']=True;meta['pending_one_command']=intent;manager._metadata(PROJECT,meta)
+   queued=b.call('insert',intent,timeout=90);assert queued['native_insert_queued']
+   for attempt in range(10):
+    popup=b.call('material.peek',timeout=90)
+    if popup['material']['status']=='present':
+     write_new(ROOT/'internal-v01-q-material-confirmation.json',popup)
+     for t in popup['material']['tables']:
+      assert all(len(v)==len(t['headers']) for v in t['rows'])
+     b.call('material.confirm',intent,timeout=90);break
+    observed=b.call('inspect',timeout=90)
+    if any(r['values'][0]=='3-200' for r in table(observed,'工程量表达式')['rows']):break
+    time.sleep(.3)
+   else:raise RuntimeError('Insert result unresolved; no replay')
+   b.call('close',timeout=90);b.call('bind.inserted',timeout=90);b.call('name.set',intent,timeout=90)
+   zero=b.call('inspect',timeout=90);zb=table(zero,'工程量表达式');target=[r for r in zb['rows'] if r['values'][0]=='3-200'];assert len(target)==1 and target[0]['values'][6]=='0'
+   path=target[0]['row_path_session_only'];index=int(path.rsplit('/',1)[1]);original=rows(budget);normalized={}
+   for r in zb['rows']:
+    k=r['row_path_session_only']
+    if k==path or k.startswith(path+'/'):continue
+    parts=k.split('/')
+    if False:pass  # This run fills the reviewed existing blank, no original rows shift.
+    newkey='/'.join(parts);normalized[newkey]=dict(r,row_path_session_only=newkey)
+   normalized[path]=original[path]
+   assert normalized==original,'Non-target data changed during zero insertion'
+   ref=s.put_evidence(PROJECT,ctx.session_id,'new_quota_zero_insert_verified',dict(capture=zero,target_path=path,non_target_unchanged=True))
+   s.append_receipt(intent,DispatchReceipt('insert',DispatchState.SENT,Observation(snap(zb),True,'native_zero_insert_verified',dict(target_path=path),(ref,)),(ref,)))
+   meta=manager.validate_session(ctx);meta['dirty']=False;meta['pending_one_command']=None;manager._metadata(PROJECT,meta)
+   write_new(ROOT/'internal-v01-q-zero-capture.json',zero)
+   opctx=OperationContext(ctx,snap(zb),time.monotonic()+120,Cancellation());intent=s.begin_intent(job['job_id'],plan.actions[1],opctx,(ref,));meta=manager.validate_session(ctx);meta['dirty']=True;meta['pending_one_command']=intent;manager._metadata(PROJECT,meta)
+   b.call('quantity.normal.one',intent,timeout=90)
+   after=b.call('inspect',timeout=90);write_new(ROOT/'internal-v01-q-after-quantity-initial.json',after)
+   b.call('resources.key.up',timeout=90)
+   b.call('resources.return.quota',timeout=90)
+   after=b.call('inspect',timeout=90);write_new(ROOT/'internal-v01-q-final-capture.json',after)
+   ab=table(after,'工程量表达式');v=rows(ab)[path]['values'];assert v[0]=='3-200' and v[6]=='1'
+   resources=table(after,'单位');assert resources['complete'] and len(resources['rows'])>0,'Quantity entered; resource panel empty; stop for user observation'
+   assert table(after,'工程量表达式')['current']['row_path_session_only']==path
+   assert any(r['values'][7] not in ('','0') for r in resources['rows']),'No resource quantity update observed'
+   ref=s.put_evidence(PROJECT,ctx.session_id,'new_quota_quantity_and_resources_verified',dict(capture=after,target_path=path,zero_prices_accepted=True,no_save=True))
+   s.append_receipt(intent,DispatchReceipt('quantity',DispatchState.SENT,Observation(snap(ab),True,'native_quantity_resources_verified',dict(target_path=path,quantity='1'),(ref,)),(ref,)))
+   meta=manager.validate_session(ctx);meta['dirty']=False;meta['pending_one_command']=None;manager._metadata(PROJECT,meta)
+   s.checkpoint(job['job_id'],dict(status='readback_verified_not_saved',evidence_id=ref,no_save=True))
+   # quota-run requests an explicit native Save after complete readback.
+   from gccp_foundation.storage.native_save_attempts import NativeSaveAttempts
+   file_path=Path(manager.validate_session(ctx)['workcopy_path']);prior=file_sha256(file_path)
+   journal=NativeSaveAttempts(s);attempt=journal.begin(ctx,str(ROOT));save_token='intent.'+uuid.uuid4().hex
+   meta=manager.validate_session(ctx);meta['dirty']=True;meta['pending_one_command_save']=save_token;manager._metadata(PROJECT,meta)
+   journal.arm(ctx,attempt)
+   result['save_dispatches']='armed_unknown'
+   save_receipt=b.call('save',save_token,timeout=90);assert save_receipt['save_queued']
+   result['save_dispatches']=1
+   saved=b.call('inspect',timeout=300)
+   for label in ('工程量表达式','单位'):assert table(saved,label)['rows']==table(after,label)['rows']
+   saved_sha=file_sha256(file_path);assert saved_sha!=prior,'Saved file did not change; never replay Save'
+   with zipfile.ZipFile(file_path) as archive:assert archive.testzip() is None
+   time.sleep(.5);assert file_sha256(file_path)==saved_sha
+   metadata=json.loads(s.db.execute('select metadata from projects where project_id=?',(PROJECT,)).fetchone()[0]);assert metadata['pending_one_command_save']==save_token
+   proof=s.put_evidence(PROJECT,ctx.session_id,'native_cli_save_observed_before_identity_reconcile',dict(capture=saved,sha256=saved_sha,native_save_dispatched=True,save_nonce=save_receipt['nonce']))
+   metadata['dirty']=False;metadata['pending_one_command_save']=None;manager._metadata(PROJECT,metadata)
+   saved_ctx=manager.reconcile_open_native_save(ctx,saved_sha)
+   proof=s.put_evidence(PROJECT,saved_ctx.session_id,'native_cli_open_save_readback',dict(capture=saved,sha256=saved_sha,saved_file_id=saved_ctx.project_file_id,native_save_dispatched=True,before_after_models_equal=True,crc_verified=True,stable_file_verified=True,backup_created=False,reopen_verified=False))
+   journal.finish_open_readback(ctx,attempt,saved_ctx,proof)
+   s.checkpoint(job['job_id'],dict(status='native_insert_quantity_saved_readback_verified',evidence_id=proof,sha256=saved_sha,reopen_verified=False))
+   result.update(status='native_insert_quantity_saved_readback_verified',target_path=path,quota=v,resource_rows=len(resources['rows']),resource_quantities=[r['values'] for r in resources['rows']],evidence_id=proof,save_dispatches=1,save_sha256=saved_sha,reopen_verified=False)
+
+ except Exception as e:result.update(status='stopped_no_replay',error_type=type(e).__name__,error=str(e))
+ finally:
+  if b:result['ipc_records']=b.records
+  s.close()
+  if not (ROOT/'internal-v01-q-result.json').exists():write_new(ROOT/'internal-v01-q-result.json',result)
+ print(json.dumps(result,ensure_ascii=False,indent=2))
+if __name__=='__main__':
+ if sys.flags.optimize:
+  raise SystemExit('Native worker requires Python assertions enabled')
+ if sys.argv[1:]==['--inspect']:
+  print(json.dumps(NativeBridge().call('inspect',timeout=90),ensure_ascii=False))
+ else:main()
