@@ -136,19 +136,31 @@ class SessionManager:
         return dict(path=str(path), file_id=file_identity(path), sha256=expected_saved_sha256)
 
     def rebind_reviewed_open_baseline(self, session, expected_sha256, artifact_id):
-        """Accept explicitly reviewed user edits without claiming a native Save."""
+        """Accept a reviewed open baseline without claiming a native Save."""
         observed = self.inspect_saved_open_identity(session, expected_sha256)
         row = self.ledger.db.execute('SELECT * FROM projects WHERE project_id=?',
                                     (session.project_id,)).fetchone()
         metadata = loads(row['metadata'])
         evidence = self.ledger.read_evidence(artifact_id, session.project_id)
         proof = evidence['data']; capture = proof.get('current_capture', {})
-        if (evidence['kind'] != 'user_edited_open_project_baseline_observed'
-                or evidence['session_id'] != session.session_id
+        user_review = (evidence['kind'] == 'user_edited_open_project_baseline_observed'
+                       and proof.get('user_requested_rebind') is True
+                       and (proof.get('user_confirmed_deletion') is True
+                            or proof.get('user_confirmed_current_baseline') is True))
+        unchanged = evidence['kind'] == 'unchanged_open_budget_baseline_observed'
+        if unchanged:
+            from gccp_foundation.application.native_worker_support import table
+
+            previous = self.ledger.read_evidence(proof['prior_artifact_id'], session.project_id)
+            unchanged = (
+                proof.get('disk_crc_verified') is True
+                and self.reviewed_baseline_reference(row) == (proof['prior_artifact_id'], previous['kind'])
+                and previous['session_id'] == session.session_id
+                and previous['data']['capture'].get('pid') == session.pid
+                and previous['data']['capture'].get('created_filetime') == session.created_filetime
+                and table(previous['data']['capture'], '工程量表达式')['rows'] == table(capture, '工程量表达式')['rows'])
+        if (not (user_review or unchanged) or evidence['session_id'] != session.session_id
                 or proof.get('session') != asdict(session)
-                or not (proof.get('user_confirmed_deletion') is True
-                        or proof.get('user_confirmed_current_baseline') is True)
-                or proof.get('user_requested_rebind') is not True
                 or proof.get('disk_sha256') != expected_sha256
                 or proof.get('disk_identity') != observed
                 or proof.get('old_file_id') != row['file_id']
@@ -164,7 +176,8 @@ class SessionManager:
         updated = replace(session, project_file_id=observed['file_id'])
         metadata['session'] = asdict(updated)
         metadata['business_ready'] = False
-        metadata.setdefault('user_baseline_rebindings', []).append(dict(
+        history = 'unchanged_baseline_rebindings' if unchanged else 'user_baseline_rebindings'
+        metadata.setdefault(history, []).append(dict(
             artifact_id=artifact_id, prior_session=asdict(session),
             observed_session=asdict(updated), disk_memory_equivalence_verified=False,
             native_save_dispatched=False))
@@ -178,9 +191,41 @@ class SessionManager:
                 raise error('SESSION_CHANGED', 'Reviewed baseline changed during rebind')
             self.ledger.db.execute('UPDATE projects SET file_id=?,metadata=? WHERE project_id=?',
                 (observed['file_id'], encoded(metadata), session.project_id))
-            self.ledger._event(row['owner'], 'user_reviewed_open_baseline_rebound_no_save',
+            event = 'unchanged_open_baseline_rebound_no_save' if unchanged else 'user_reviewed_open_baseline_rebound_no_save'
+            self.ledger._event(row['owner'], event,
                 dict(artifact_id=artifact_id, session=asdict(updated)))
         return updated
+
+    def reviewed_baseline_reference(self, project):
+        """Return the newest verified business snapshot for an open binding refresh."""
+        latest = self.ledger.db.execute(
+            "SELECT result FROM native_cli_commands WHERE project_id=? AND phase='readback_verified' "
+            'ORDER BY created_ms DESC, rowid DESC LIMIT 1', (project['project_id'],)).fetchone()
+        if latest:
+            result = loads(latest['result'])
+            readback_kind = {
+                'native_delete_readback_verified_not_saved': 'native_quota_delete_readback',
+                'native_supplement_readback_verified_not_saved': 'native_supplement_readback',
+                'native_standard_factor_readback_verified_not_saved': 'native_standard_factor_readback',
+                'native_material_spec_readback_verified_not_saved': 'native_material_spec_readback',
+                'native_quota_clone_readback_verified_not_saved': 'native_quota_clone_readback',
+                'native_quota_clone_partial_readback_verified_not_saved': 'native_quota_clone_readback',
+                'native_quota_material_name_readback_verified_not_saved': 'native_quota_material_name_readback',
+                'native_material_edit_verified_not_saved': 'native_material_edit_readback',
+            }.get(result.get('status'))
+            if readback_kind and result.get('evidence_id'):
+                return result['evidence_id'], readback_kind
+        if project['owner']:
+            job = self.ledger.job(project['owner'])
+            if all(self.ledger.action_state(job['job_id'], action) == 'readback_verified'
+                   for action in ('insert', 'quantity')):
+                ref = loads(job['metadata']).get('evidence_id')
+                if ref:
+                    evidence = self.ledger.read_evidence(ref, project['project_id'])
+                    if evidence['kind'] in ('new_quota_quantity_and_resources_verified', 'native_cli_open_save_readback',
+                                            'native_rounded_quantity_readback'):
+                        return ref, evidence['kind']
+        raise error('EVIDENCE_MISMATCH', 'Latest verified budget snapshot is required')
 
     def reconcile_open_native_save(self, session, expected_saved_sha256):
         """Explicitly accept a verified native atomic save, never an unknown edit.

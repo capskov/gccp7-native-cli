@@ -1,0 +1,29 @@
+{
+  "source": {
+    "filename": "04市政第一册.pdf",
+    "sha256": "6159804b7b8cf596278573a678522c11fe49bd46cb60e7d076444fd7ce566f27",
+    "url": "https://zjw.beijing.gov.cn/bjjs/xxgk/zcwj2024/qtzcwj/xxyx13/743876492/04%E5%B8%82%E6%94%BF%E7%AC%AC%E4%B8%80%E5%86%8C.pdf"
+  },
+  "reviewed_at": "2026-11-08",
+  "reason": "按官方 PDF 冠梁、腰梁子目表拆分合并名称，补齐各子目的计量单位。",
+  "entries": [
+    {
+      "code": "3-34",
+      "pdf_page": 66,
+      "before": {"name": "混凝土冠梁 混凝土腰梁 钢腰梁", "unit": "见表"},
+      "after": {"name": "混凝土冠梁", "unit": "m3"}
+    },
+    {
+      "code": "3-35",
+      "pdf_page": 66,
+      "before": {"name": "混凝土冠梁 混凝土腰梁 钢腰梁", "unit": "见表"},
+      "after": {"name": "混凝土腰梁", "unit": "m3"}
+    },
+    {
+      "code": "3-36",
+      "pdf_page": 66,
+      "before": {"name": "混凝土冠梁 混凝土腰梁 钢腰梁", "unit": "见表"},
+      "after": {"name": "钢腰梁", "unit": "t"}
+    }
+  ]
+}

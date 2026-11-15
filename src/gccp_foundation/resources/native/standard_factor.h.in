@@ -1,0 +1,74 @@
+#include <QMetaMethod>
+
+static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
+    const auto op = req["operation"].toString();
+    if (op == "inspect") return true;
+    if (op != "standard.factor") { error = "operation_not_allowed"; return false; }
+    if (QApplication::activePopupWidget() || QApplication::activeModalWidget()) {
+        error = "dialog_or_popup_active"; return false;
+    }
+
+    auto mod = GetModuleHandleW(L"GLDTableView.dll");
+    const auto get = reinterpret_cast<QAbstractItemModel* (__fastcall *)(const void*)>(
+        GetProcAddress(mod, "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
+    const auto current = GetProcAddress(mod, "?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
+    if (!get || !current) { error = "pinned_getter_export_missing"; return false; }
+
+    QPointer<QAbstractItemModel> conversion;
+    int budgets = 0, conversions = 0;
+    QJsonObject selected;
+    for (auto widget : QApplication::allWidgets()) {
+        if (!widget->isVisible()) continue;
+        const auto view = widget->qt_metacast("GlodonAbstractItemView");
+        auto model = view ? get(view) : nullptr;
+        if (!model || model->thread() != qApp->thread()) continue;
+        if (widget->inherits("GTPGSPTableView") && model->columnCount() == 13
+                && model->headerData(4, Qt::Horizontal).toString() == "工程量表达式") {
+            ++budgets;
+            selected = currentIndexEvidence(model, readPinnedCurrentIndex(view, reinterpret_cast<const void*>(current)));
+        }
+        if (widget->inherits("GBQStdConvTableView") && model->inherits("GBQStdConvModel")
+                && model->columnCount() == 3 && model->headerData(2, Qt::Horizontal).toString() == "换算内容") {
+            conversion = model;
+            ++conversions;
+        }
+    }
+    if (budgets != 1 || conversions != 1 || !selected["verified"].toBool()
+            || selected["row_path_session_only"] != kPath || selected["values"] != req["expected_target"]) {
+        error = "conversion_target_changed"; return false;
+    }
+    const int count = conversion->rowCount();
+    if (count < 1 || count > 32) { error = "conversion_table_bound"; return false; }
+    QModelIndex cell;
+    for (int i = 0; i < count; ++i) {
+        if (conversion->index(i, 1).data().toString() != kRule) continue;
+        if (cell.isValid()) { error = "conversion_rule_ambiguous"; return false; }
+        cell = conversion->index(i, 2);
+    }
+    auto initial = cell.data(Qt::EditRole);
+    if (!cell.isValid() || cell.parent().isValid() || !(conversion->flags(cell) & Qt::ItemIsEditable)
+            || initial.type() != QVariant::Bool || initial.toBool()) {
+        error = "conversion_rule_not_editable_false"; return false;
+    }
+    const auto meta = conversion->metaObject();
+    const int index = meta->indexOfMethod("setData(QModelIndex,QVariant,int)");
+    if (index < 0) { error = "conversion_setter_missing"; return false; }
+    const auto setter = meta->method(index);
+    if (QString::fromLatin1(setter.enclosingMetaObject()->className()) != "QAbstractItemModel"
+            || setter.returnType() != QMetaType::Bool) {
+        error = "conversion_setter_signature_changed"; return false;
+    }
+    static bool dispatched = false;
+    if (dispatched) { error = "conversion_already_dispatched"; return false; }
+    if (!prepareStage(req, "01-before-standard-factor-set-data", error)) return false;
+    dispatched = true;
+    out["business_dispatches"] = 1;
+    bool accepted = false;
+    const auto invoked = setter.invoke(conversion, Qt::DirectConnection, Q_RETURN_ARG(bool, accepted),
+        Q_ARG(QModelIndex, cell), Q_ARG(QVariant, QVariant(true)), Q_ARG(int, int(Qt::EditRole)));
+    out["setter_invoked"] = invoked;
+    out["setter_accepted"] = accepted;
+    if (!prepareStage(req, "02-after-standard-factor-set-data", error)) return false;
+    if (!invoked || !accepted) { error = "conversion_setter_outcome_unknown"; return false; }
+    return true;
+}

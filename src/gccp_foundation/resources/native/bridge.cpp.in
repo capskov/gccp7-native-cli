@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <QApplication>
 #include <QWidget>
+#include <QAction>
+#include <QMenu>
 #include <QAbstractItemModel>
 #include <QPointer>
 #include <QThread>
@@ -20,7 +22,25 @@
 #include "current_selection.h"
 static LONG busy=0,captures=0;
 static DWORD entryThread=0;
+static constexpr int MAX_OBSERVED_ROWS=500;
 static QString root(){return QStringLiteral("__IPC_DIRECTORY__");}
+
+// Persist each boundary before entering vendor code so an application crash
+// leaves evidence even when the normal response cannot be written.
+static bool prepareStage(const QJsonObject &req,const char *stage,QString &error){
+    const QString path=root()+req["nonce"].toString()+".prepare-"+QString::fromLatin1(stage)+".stage";
+    HANDLE file=CreateFileW(reinterpret_cast<LPCWSTR>(path.utf16()),GENERIC_WRITE,0,nullptr,
+                            CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE){error="prepare_stage_open_failed";return false;}
+    const QByteArray data(stage);
+    DWORD written=0;
+    const bool saved=WriteFile(file,data.constData(),DWORD(data.size()),&written,nullptr)
+        && written==DWORD(data.size()) && FlushFileBuffers(file);
+    CloseHandle(file);
+    if(!saved)error="prepare_stage_flush_failed";
+    return saved;
+}
+
 #include "operations.h"
 static void capture(){
     struct Reset {~Reset(){InterlockedExchange(&busy,0);}} reset;
@@ -57,7 +77,22 @@ static void capture(){
             else {auto bytes=QJsonDocument(req).toJson();DWORD n=0;bool durable=WriteFile(f,bytes.constData(),DWORD(bytes.size()),&n,nullptr) && n==DWORD(bytes.size()) && FlushFileBuffers(f);CloseHandle(f);if(!durable)error="native_intent_not_durable";}
         }
     }
-    if(error.isEmpty())nativeOperation(req,out,error);
+    if(error.isEmpty() && (op!="prepare" || prepareStage(req,"01-entered",error)))
+        nativeOperation(req,out,error);
+    if(error.isEmpty() && op=="inspect"){
+        QJsonArray actions;
+        if(auto menu=qobject_cast<QMenu*>(QApplication::activePopupWidget())){
+            for(auto action:menu->actions()){
+                if(!action->isVisible() || action->isSeparator())continue;
+                if(actions.size()==128)break;
+                actions.append(QJsonObject{{"text",action->text()},
+                    {"object_name",action->objectName()},{"enabled",action->isEnabled()},
+                    {"shortcut",action->shortcut().toString(QKeySequence::PortableText)},
+                    {"has_submenu",action->menu()!=nullptr}});
+            }
+        }
+        out["active_menu_actions"]=actions;
+    }
     QJsonArray tables;QSet<QAbstractItemModel*> seen;
     auto mod=GetModuleHandleW(L"GLDTableView.dll");
     auto mg=GetProcAddress(mod,"?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ");
@@ -72,18 +107,21 @@ static void capture(){
         if(m->thread()!=qApp->thread() || seen.size()>=8){error="thread_or_table_bound_rejected";break;}
         seen.insert(m);const int nc=m->columnCount();if(nc<1 || nc>32){error="column_bound_rejected";break;}
         QJsonArray headers,rows;for(int c=0;c<nc;++c)headers.append(m->headerData(c,Qt::Horizontal).toString());
+        // GCCP's standard conversion table repeats its root rows for every parent.
+        const bool flatConversion = QString::fromLatin1(m->metaObject()->className()) == "GBQStdConvModel"
+            && nc == 3 && headers.at(2).toString() == "换算内容";
         bool complete=true;
         std::function<void(QModelIndex,QString,int)> walk=[&](QModelIndex p,QString path,int depth){
-            if(!m || depth>20 || rows.size()>500 || m->rowCount(p)>500){complete=false;return;}
+            if(!m || depth>20 || rows.size()>MAX_OBSERVED_ROWS || m->rowCount(p)>MAX_OBSERVED_ROWS){complete=false;return;}
             const int nr=m->rowCount(p);
             for(int r=0;r<nr && complete;++r){
-                if(rows.size()>=500){complete=false;return;}
+                if(rows.size()>=MAX_OBSERVED_ROWS){complete=false;return;}
                 if(QDateTime::currentMSecsSinceEpoch()-now>2000){complete=false;return;}
                 const auto idx=m->index(r,0,p);QJsonArray values;
                 for(int c=0;c<nc;++c)values.append(m->index(r,c,p).data(Qt::DisplayRole).toString());
                 const QString rp=path+"/"+QString::number(r);
                 rows.append(QJsonObject{{"depth",depth},{"row_path_session_only",rp},{"values",values}});
-                if(m->hasChildren(idx))walk(idx,rp,depth+1);
+                if(!flatConversion && m->hasChildren(idx))walk(idx,rp,depth+1);
             }
             if(m->rowCount(p)!=nr)complete=false;
         };

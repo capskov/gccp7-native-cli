@@ -8,10 +8,12 @@ import subprocess
 import sys
 import time
 import uuid
+from zipfile import BadZipFile, ZipFile
 
 from .native_build import TEMPLATES, compile_bridge, profile_path, toolchain
-from .native_cli import Rejected, initialize_commands
+from .native_cli import Rejected, initialize_commands, runtime_config
 from .native_runtime import render_transport
+from .ports import SessionContext
 from .native_worker_support import (
     Cancellation, Ledger, RuntimeProfile, SessionManager, WindowsDesktop,
     execution_lock, file_sha256, project_window_prefix, table,
@@ -47,7 +49,65 @@ print(json.dumps(NativeBridge().call("inspect", timeout=30), ensure_ascii=False)
     return files
 
 
-def bind_open(state, runtime_root, workcopy, expected_sha256):
+def price_only_budget_delta(previous, current):
+    """Allow monetary cells to change while preserving the complete budget structure."""
+    price_columns = {'单价', '合价', '全费合价', '单位指标'}
+    headers = previous['headers']
+    if headers != current['headers'] or not price_columns.issubset(headers):
+        raise Rejected('PRICE_BASELINE_COLUMNS_CHANGED', 'Budget columns differ from the original readback')
+    if len(previous['rows']) != len(current['rows']):
+        raise Rejected('PRICE_BASELINE_SCOPE_CHANGED', 'Budget row count differs from the original readback')
+    changes = 0
+    for old, new in zip(previous['rows'], current['rows']):
+        if old == new:
+            continue
+        if (old['row_path_session_only'] != new['row_path_session_only'] or old['depth'] != new['depth']
+                or len(old['values']) != len(headers) or len(new['values']) != len(headers)
+                or any(left != right and header not in price_columns
+                       for header, left, right in zip(headers, old['values'], new['values']))):
+            raise Rejected('PRICE_BASELINE_SCOPE_CHANGED', 'A non-price budget field differs from the original readback')
+        changes += 1
+    return changes
+
+
+def refresh_open_identity(store, manager, row, workcopy, sha256, inspector, *, accept_price_updates=False):
+    meta = json.loads(row['metadata'])
+    if meta.get('dirty') or not meta.get('session'):
+        raise Rejected('PROJECT_NEEDS_RECONCILIATION', 'The original verified business job and a clean open session are required')
+    session = SessionContext(**meta['session'])
+    _, worker = runtime_config(inspector)
+    disk = manager.inspect_saved_open_identity(session, sha256)
+    try:
+        with ZipFile(workcopy) as archive:
+            if archive.testzip() is not None:
+                raise Rejected('PROJECT_CRC_INVALID', 'Current disk file failed archive verification')
+    except BadZipFile as exc:
+        raise Rejected('PROJECT_CRC_INVALID', 'Current disk file is not a complete GPB7 archive') from exc
+    observed = subprocess.run([sys.executable, '-X', 'utf8', str(worker), '--inspect'],
+                              capture_output=True, text=True, encoding='utf-8', check=True, timeout=50)
+    capture = json.loads(observed.stdout)
+    prior_id, _ = manager.reviewed_baseline_reference(row)
+    kind = 'unchanged_open_budget_baseline_observed'
+    evidence = dict(session=asdict(session), current_capture=capture, prior_artifact_id=prior_id,
+                    disk_sha256=sha256, disk_identity=disk, old_file_id=row['file_id'],
+                    prior_owner=row['owner'], disk_crc_verified=True)
+    if accept_price_updates:
+        prior = store.read_evidence(prior_id, row['project_id'])
+        if prior['session_id'] != session.session_id:
+            raise Rejected('PRICE_BASELINE_SESSION_CHANGED', 'Original verified budget must come from the current session')
+        changed = price_only_budget_delta(table(prior['data']['capture'], '工程量表达式'),
+                                          table(capture, '工程量表达式'))
+        kind = 'user_edited_open_project_baseline_observed'
+        evidence.update(user_requested_rebind=True, user_confirmed_current_baseline=True, changed_price_rows=changed)
+    artifact = store.put_evidence(row['project_id'], session.session_id, kind, evidence)
+    manager.rebind_reviewed_open_baseline(session, sha256, artifact)
+    return evidence.get('changed_price_rows')
+
+
+def bind_open(state, runtime_root, workcopy, expected_sha256, *, refresh_from_inspector=None,
+              accept_price_updates=False):
+    if accept_price_updates and refresh_from_inspector is None:
+        raise Rejected('PRICE_BASELINE_INSPECTOR_REQUIRED', 'Provide the original inspector to review changed prices')
     if not re.fullmatch(r'[0-9a-fA-F]{64}', expected_sha256):
         raise Rejected('DISK_DIGEST_INVALID', 'Provide the reviewed workcopy SHA256')
     expected_sha256 = expected_sha256.lower()
@@ -64,6 +124,8 @@ def bind_open(state, runtime_root, workcopy, expected_sha256):
                       if Path(json.loads(p['metadata']).get('workcopy_path', '')).resolve() == workcopy]
         if len(registered) > 1:
             raise Rejected('PROJECT_IDENTITY_MISMATCH', 'Conflicting project registrations')
+        if refresh_from_inspector is not None and not registered:
+            raise Rejected('PROJECT_NOT_BOUND', 'Refresh requires the original project ledger')
         project_id = registered[0]['project_id'] if registered else manager.adopt_open_workcopy(workcopy, expected_sha256)
         row = store.db.execute('SELECT * FROM projects WHERE project_id=?', (project_id,)).fetchone()
         with execution_lock(store.root, row['file_id']):
@@ -71,6 +133,11 @@ def bind_open(state, runtime_root, workcopy, expected_sha256):
                     store.db.execute("SELECT 1 FROM native_cli_commands WHERE project_id=? AND phase='armed_unknown'",
                                      (project_id,)).fetchone()):
                 raise Rejected('PROJECT_NEEDS_RECONCILIATION', 'Use the original command evidence before binding again')
+            changed_price_rows = None
+            if refresh_from_inspector is not None:
+                changed_price_rows = refresh_open_identity(store, manager, row, workcopy, expected_sha256,
+                                                           refresh_from_inspector,
+                                                           accept_price_updates=accept_price_updates)
             ctx = manager.bind(project_id, time.monotonic()+8, Cancellation())
             metadata = manager.validate_session(ctx)
             if metadata.get('dirty') or file_sha256(workcopy) != expected_sha256:
@@ -101,7 +168,10 @@ def bind_open(state, runtime_root, workcopy, expected_sha256):
                 artifact_sha256=pins), ensure_ascii=False, indent=2)+'\n',encoding='utf-8')
             parents = [{'id':r['values'][12], 'name':r['values'][2]} for r in budget['rows']
                        if r['depth'] == 1 and r['values'][1] == '部' and r['values'][12]]
-            return dict(project_id=project_id, inspector=str(manifest), parents=parents,
-                        budget_rows=len(budget['rows']), business_dispatches=0)
+            result = dict(project_id=project_id, inspector=str(manifest), parents=parents,
+                          budget_rows=len(budget['rows']), business_dispatches=0)
+            if changed_price_rows is not None:
+                result['changed_price_rows'] = changed_price_rows
+            return result
     finally:
         store.close()

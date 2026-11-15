@@ -10,7 +10,7 @@
 #include <QMetaMethod>
 #include <QPersistentModelIndex>
 #include <QKeyEvent>
-static QString quotaName(){return QStringLiteral("球墨铸铁管管件安装 公称直径(mm以内) 600");}
+static QString quotaName(){return QStringLiteral(__CANDIDATE_NAME__);}
 static QString testNote(){return QStringLiteral("POC01-20261102B-TEST 保留检查");}
 struct FlowState {
     int row=-1;bool inserted=false,materialConfirmed=false,noteDone=false,quantityDone=false,saved=false;
@@ -21,8 +21,8 @@ static FlowState &flow(){static FlowState *s=nullptr;if(!s)s=new FlowState;retur
 typedef QAbstractItemModel* (__fastcall *ModelGetter)(const void*);
 typedef QItemSelectionModel* (__fastcall *SelectionGetter)(const void*);
 static QJsonArray rowValues(QAbstractItemModel *m,QModelIndex i){QJsonArray a;for(int c=0;c<m->columnCount();++c)a.append(m->index(i.row(),c,i.parent()).data().toString());return a;}
-static bool zeroQuota(QAbstractItemModel *m,QModelIndex i){auto v=rowValues(m,i);return v.size()==13 && v[0]=="3-200" && v[2]==quotaName() && v[3]=="个" && v[6]=="0" && v[8]=="0";}
-static QWidget* expectedMaterial(){QWidget *found=nullptr;int n=0;for(auto w:QApplication::allWidgets())if(w->isWindow() && w->isVisible() && w->windowTitle()=="3-200未计价材料"){found=w;++n;}return n==1?found:nullptr;}
+static bool zeroQuota(QAbstractItemModel *m,QModelIndex i){auto v=rowValues(m,i);return v.size()==13 && v[0]==__CANDIDATE_CODE__ && v[2]==quotaName() && v[3]==__CANDIDATE_UNIT__ && v[6]=="0" && v[8]=="0";}
+static QWidget* expectedMaterial(){QWidget *found=nullptr;int n=0;for(auto w:QApplication::allWidgets())if(w->isWindow() && w->isVisible() && w->windowTitle()==QStringLiteral(__CANDIDATE_CODE__) + QStringLiteral("未计价材料")){found=w;++n;}return n==1?found:nullptr;}
 static QJsonObject materialEvidence(QWidget *popup,ModelGetter get){
     QJsonArray matches,buttons;QSet<QAbstractItemModel*> seen;
     if(!popup)return {{"status","absent"}};
@@ -140,7 +140,7 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     if(parents!=1 || bm->rowCount(parent)>100){error="parent_not_unique";return false;}
     auto bv=budget->qt_metacast("GlodonAbstractItemView");
     if(op=="resources.return.quota"){
-        QModelIndex wanted;int matches=0;for(int r=0;r<bm->rowCount(parent);++r){auto i=bm->index(r,0,parent);auto v=rowValues(bm,i);if(v[0]=="3-200" && v[2]==quotaName()+" [CLI v0.1测试]" && v[6]=="1"){wanted=i;++matches;}}
+        QModelIndex wanted;int matches=0;for(int r=0;r<bm->rowCount(parent);++r){auto i=bm->index(r,0,parent);auto v=rowValues(bm,i);if(v[0]==__CANDIDATE_CODE__ && v[2]==quotaName()+" [CLI v0.1测试]" && v[6]=="1"){wanted=i;++matches;}}
         if(matches!=1){error="quantity_one_target_not_unique";return false;}
         for(int n=0;n<4;++n){auto cur=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));if(cur.sibling(cur.row(),0)==wanted){out["normal_up_count"]=n;return true;}
             bool child=false;for(auto i=cur.parent();i.isValid();i=i.parent())if(i==wanted)child=true;
@@ -155,14 +155,34 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
         s.row=5;
         auto target=bm->index(s.row,0,parent);
         int n=budget->metaObject()->indexOfMethod("setCurrentIndex(QModelIndex)");if(n<0){error="navigation_missing";return false;}auto method=budget->metaObject()->method(n);
-        if(QString(method.enclosingMetaObject()->className())!="GSPTableView" || !method.invoke(budget,Qt::DirectConnection,Q_ARG(QModelIndex,target))){error="navigation_not_verified";return false;}
-        budget->window()->activateWindow();budget->setFocus(Qt::OtherFocusReason);
+        if(!target.isValid() || target.model()!=bm || target.parent()!=parent ||
+            QString(method.enclosingMetaObject()->className())!="GSPTableView"){error="navigation_not_verified";return false;}
+        if(!prepareStage(req,"02-before-select",error))return false;
+        QPointer<QWidget> guardedBudget(budget);
+        QPointer<QAbstractItemModel> guardedModel(bm);
+        QPersistentModelIndex expected(target);
+        if(!method.invoke(budget,Qt::DirectConnection,Q_ARG(QModelIndex,target))){error="navigation_not_verified";return false;}
+        if(!prepareStage(req,"03-after-select",error))return false;
+        if(!guardedBudget || !guardedModel || !expected.isValid() || mg(bv)!=guardedModel.data()){
+            error="navigation_model_replaced";return false;
+        }
+        const auto selected=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));
+        if(!selected.isValid() || selected.sibling(selected.row(),0)!=expected){
+            error="navigation_readback_mismatch";return false;
+        }
+        if(!prepareStage(req,"04-before-activate",error))return false;
+        guardedBudget->window()->activateWindow();
+        if(!prepareStage(req,"05-after-activate",error))return false;
+        if(!guardedBudget){error="budget_view_replaced_during_activation";return false;}
+        if(!prepareStage(req,"06-before-focus",error))return false;
+        guardedBudget->setFocus(Qt::OtherFocusReason);
+        if(!prepareStage(req,"07-after-focus",error))return false;
         out["target_child_row"]=s.row;out["application_selection_changed"]=true;return true;
     }
     if(op=="resume.done"){
         if(s.row>=0 || nq || req["outer_intent_id"].toString().size()!=39 || bm->rowCount(parent)<5){error="resume_done_guard";return false;}
         auto i=bm->index(5,0,parent);auto v=rowValues(bm,i);
-        if(v[0]!="3-200" || v[2]!=quotaName()+" [CLI v0.1测试]" || v[3]!="个" || (v[6]!="1" && v[6]!="0") || (v[8]!="197.23" && v[8]!="0")){
+        if(v[0]!=__CANDIDATE_CODE__ || v[2]!=quotaName()+" [CLI v0.1测试]" || v[3]!=__CANDIDATE_UNIT__ || (v[6]!="1" && v[6]!="0") || (v[8]!="197.23" && v[8]!="0")){
             error="resume_done_business_state_mismatch";return false;}
         s.row=5;s.inserted=s.materialConfirmed=s.noteDone=true;s.quantityDone=v[6]=="1";
         out["resumed_save_only_without_business_redispatch"]=true;return true;
@@ -170,13 +190,13 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     if(op=="resume"){
         if(s.row>=0 || nq || req["outer_intent_id"].toString().size()!=39 || bm->rowCount(parent)<5){error="resume_guard";return false;}
         auto i=bm->index(5,0,parent);auto v=rowValues(bm,i);
-        if(v[0]!="3-200" || (v[2]!=quotaName() && v[2]!=quotaName()+" [CLI v0.1测试]") || v[3]!="个" || v[6]!="0" || v[8]!="0" || (v[12]!="" && v[12]!=testNote())){
+        if(v[0]!=__CANDIDATE_CODE__ || (v[2]!=quotaName() && v[2]!=quotaName()+" [CLI v0.1测试]") || v[3]!=__CANDIDATE_UNIT__ || v[6]!="0" || v[8]!="0" || (v[12]!="" && v[12]!=testNote())){
             error="resume_inserted_identity_not_verified";return false;}
         s.row=5;s.inserted=true;s.materialConfirmed=true;s.noteDone=v[2]==quotaName()+" [CLI v0.1测试]";
         out["resumed_without_insert"]=true;out["target_values"]=v;return true;
     }
     if(op=="bind.inserted"){
-        int found=0;for(int r=0;r<bm->rowCount(parent);++r){auto v=rowValues(bm,bm->index(r,0,parent));if(v[0]=="3-200" && v[2]==quotaName() && v[6]=="0"){s.row=r;++found;}}
+        int found=0;for(int r=0;r<bm->rowCount(parent);++r){auto v=rowValues(bm,bm->index(r,0,parent));if(v[0]==__CANDIDATE_CODE__ && v[2]==quotaName() && v[6]=="0"){s.row=r;++found;}}
         if(found!=1 || !s.inserted){error="inserted_identity_not_unique";return false;}out["bound_inserted_row"]=s.row;return true;
     }
     if(s.row<0 || s.row>=bm->rowCount(parent)){error="bound_target_missing";return false;}auto target=bm->index(s.row,0,parent);auto targetValues=rowValues(bm,target);
@@ -202,8 +222,8 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     }
     if(op=="quantity.normal.zero" || op=="quantity.normal.one"){
         static int phase=0;const bool zero=op=="quantity.normal.zero";
-        if((zero && phase!=0) || (!zero && phase!=0 && phase!=1) || targetValues[0]!="3-200" || targetValues[2]!=quotaName()+" [CLI v0.1测试]" ||
-           targetValues[3]!="个" || targetValues[6]!=(zero?QStringLiteral("1"):QStringLiteral("0"))){error="normal_quantity_phase_guard";return false;}
+        if((zero && phase!=0) || (!zero && phase!=0 && phase!=1) || targetValues[0]!=__CANDIDATE_CODE__ || targetValues[2]!=quotaName()+" [CLI v0.1测试]" ||
+           targetValues[3]!=__CANDIDATE_UNIT__ || targetValues[6]!=(zero?QStringLiteral("1"):QStringLiteral("0"))){error="normal_quantity_phase_guard";return false;}
         auto cell=bm->index(s.row,6,parent);out["quantity_cell_flags"]=int(bm->flags(cell));
         if(!(bm->flags(cell)&Qt::ItemIsEditable)){error="normal_quantity_not_editable";return false;}
         budget->window()->activateWindow();QApplication::setActiveWindow(budget->window());
@@ -234,7 +254,7 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     }
     if(op=="name.set" || op=="quantity.set"){
         const bool name=op=="name.set";
-        if(!s.inserted || nq || targetValues[0]!="3-200" || targetValues[3]!="个" || targetValues[6]!="0" ||
+        if(!s.inserted || nq || targetValues[0]!=__CANDIDATE_CODE__ || targetValues[3]!=__CANDIDATE_UNIT__ || targetValues[6]!="0" ||
            (targetValues[2]!=quotaName() && targetValues[2]!=quotaName()+" [CLI v0.1测试]") || (!name && !s.noteDone)){
             error="fixed_model_field_precondition";return false;}
         const int column=name?2:4;auto cell=bm->index(s.row,column,parent);const int flags=int(bm->flags(cell));
@@ -250,7 +270,7 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     }
     if(op=="resources.key.up"){
         auto cur=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));
-        if(cur.parent()!=parent || cur.row()!=s.row+1 || targetValues[0]!="3-200" || targetValues[6]!="1"){error="normal_up_context_guard";return false;}
+        if(cur.parent()!=parent || cur.row()!=s.row+1 || targetValues[0]!=__CANDIDATE_CODE__ || targetValues[6]!="1"){error="normal_up_context_guard";return false;}
         budget->setFocus(Qt::OtherFocusReason);QKeyEvent up(QEvent::KeyPress,Qt::Key_Up,Qt::NoModifier);
         out["normal_up_delivered"]=QApplication::sendEvent(budget,&up);return true;
     }
@@ -277,10 +297,14 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     if(libs!=1 || library!="北京市建设工程概算消耗量标准(2025)"){error="library_mismatch";return false;}
     if(op=="search"){
         QList<QLineEdit*> edits;for(auto e:query->findChildren<QLineEdit*>())if(e->isVisible() && e->inherits("GLDHintLineEdit"))edits.append(e);
-        if(edits.size()!=1){error="search_editor_not_unique";return false;}edits[0]->setText("3-200");return true;
+        if(edits.size()!=1){error="search_editor_not_unique";return false;}edits[0]->setText(__CANDIDATE_CODE__);return true;
     }
-    if(nc!=1 || !cm || cm->rowCount()>100){error="candidate_model_not_unique";return false;}QModelIndex quota;int found=0;
-    for(int r=0;r<cm->rowCount();++r){auto i=cm->index(r,0);auto v=rowValues(cm,i);if(v[0]=="3-200" && v[1]==quotaName() && v[2]=="个" && v[4]=="管网"){quota=i;++found;}}
+    if(nc!=1 || !cm){error="candidate_model_not_unique";return false;}
+    const int candidateRows=cm->rowCount();
+    if(candidateRows>MAX_OBSERVED_ROWS){error="candidate_row_bound_rejected";return false;}
+    QModelIndex quota;int found=0;
+    for(int r=0;r<candidateRows;++r){auto i=cm->index(r,0);auto v=rowValues(cm,i);if(v[0]==__CANDIDATE_CODE__ && v[1]==quotaName() && v[2]==__CANDIDATE_UNIT__ && v[4]==__CANDIDATE_SPECIALTY__){quota=i;++found;}}
+    if(cm->rowCount()!=candidateRows){error="candidate_model_changed";return false;}
     if(found!=1){error="full_candidate_not_unique";return false;}auto cv=candidate->qt_metacast("GlodonAbstractItemView");auto selection=sg(cv);
     if(!selection || selection->model()!=cm || selection->thread()!=qApp->thread()){error="selection_not_verified";return false;}
     if(op=="select"){selection->setCurrentIndex(quota,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);out["application_selection_changed"]=true;return true;}

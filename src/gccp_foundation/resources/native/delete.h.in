@@ -70,11 +70,27 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
     const auto project = model->index(0, 0);
     QModelIndex parent, target;
     int parents = 0, targets = 0;
-    if (model->rowCount(project) > 500) { error = "division_bound"; return false; }
-    for (int r = 0; r < model->rowCount(project); ++r) {
-        auto row = model->index(r, 0, project);
-        auto values = quotaValues(model, row);
-        if (values[1] == "部" && values[12] == kParent) { parent = row; ++parents; }
+    if (kSections.isEmpty()) {
+        if (model->rowCount(project) > 500) { error = "division_bound"; return false; }
+        for (int r = 0; r < model->rowCount(project); ++r) {
+            auto row = model->index(r, 0, project);
+            auto values = quotaValues(model, row);
+            if (values[1] == "部" && values[12] == kParent) { parent = row; ++parents; }
+        }
+    } else {
+        parent = project;
+        for (const auto &section : kSections) {
+            QModelIndex match;
+            parents = 0;
+            if (model->rowCount(parent) > 500) { error = "division_bound"; return false; }
+            for (int r = 0; r < model->rowCount(parent); ++r) {
+                auto row = model->index(r, 0, parent);
+                auto values = quotaValues(model, row);
+                if (values[1] == "部" && values[2] == section) { match = row; ++parents; }
+            }
+            if (parents != 1) { error = "parent_not_unique"; return false; }
+            parent = match;
+        }
     }
     if (parents != 1 || model->rowCount(parent) > 500) {
         error = "parent_not_unique";
@@ -99,7 +115,7 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         }
         out["target"] = QJsonObject{
             {"values", quotaValues(model, target)},
-            {"path", QString("/0/%1/%2").arg(parent.row()).arg(target.row())},
+            {"path", currentIndexEvidence(model, target)["row_path_session_only"]},
             {"strikeout", strikeout}, {"enabled_cells", enabledCells},
             {"foreground", foreground}, {"background", background}
         };
@@ -159,20 +175,29 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         out["native_delete_confirmation_clicked"] = true;
         return true;
     }
-    const auto nav = budget->metaObject()->indexOfMethod("setCurrentIndex(QModelIndex)");
-    if (!selection || selection->model() != model || selection->thread() != qApp->thread() || nav < 0) {
+    if (!selection || selection->model() != model || selection->thread() != qApp->thread()) {
         error = "budget_navigation_not_verified";
         return false;
     }
-    auto method = budget->metaObject()->method(nav);
     QPersistentModelIndex expected(target);
     QPointer<QAction> selectedAction(action);
-    if (QString(method.enclosingMetaObject()->className()) != "GSPTableView" ||
-        !method.invoke(budget, Qt::DirectConnection, Q_ARG(QModelIndex, target))) {
-        error = "budget_navigation_not_verified";
-        return false;
+    if (kSections.isEmpty()) {
+        const auto nav = budget->metaObject()->indexOfMethod("setCurrentIndex(QModelIndex)");
+        if (nav < 0) { error = "budget_navigation_not_verified"; return false; }
+        const auto method = budget->metaObject()->method(nav);
+        if (QString(method.enclosingMetaObject()->className()) != "GSPTableView" ||
+            !method.invoke(budget, Qt::DirectConnection, Q_ARG(QModelIndex, target))) {
+            error = "budget_navigation_not_verified";
+            return false;
+        }
+        budget->setFocus(Qt::OtherFocusReason);
+    } else {
+        const auto current = readPinnedCurrentIndex(view, reinterpret_cast<const void*>(currentGetter));
+        if (!current.isValid() || current.model() != model || current.sibling(current.row(), 0) != expected) {
+            error = "nested_delete_target_not_current";
+            return false;
+        }
     }
-    budget->setFocus(Qt::OtherFocusReason);
     selection->select(target, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
     auto current = readPinnedCurrentIndex(view, reinterpret_cast<const void*>(currentGetter));
     auto selected = selection->selectedRows();

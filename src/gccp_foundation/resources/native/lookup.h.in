@@ -1,0 +1,54 @@
+#include <QAction>
+#include <QAbstractButton>
+#include <QComboBox>
+#include <QLineEdit>
+
+static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
+    const auto op = req["operation"].toString();
+    if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
+        error = "query_blocked_by_dialog"; return false;
+    }
+    QList<QWidget*> queries;
+    for (auto w : QApplication::allWidgets())
+        if (w->isVisible() && w->inherits("GBQNormDBQueryFrame")) queries.append(w);
+    if (op == "open") {
+        QSet<QAction*> actions;
+        for (auto w : QApplication::allWidgets())
+            for (auto a : w->actions()) actions.insert(a);
+        for (auto w : QApplication::topLevelWidgets())
+            for (auto a : w->findChildren<QAction*>()) actions.insert(a);
+        QList<QAction*> matches;
+        for (auto a : actions)
+            if (a->thread() == qApp->thread() && a->isEnabled() && a->objectName() == "BQ_QueryOfPopMenu"
+                && a->text() == "查询" && a->shortcut().toString() == "F3") matches.append(a);
+        if (!queries.isEmpty() || matches.size() != 1) { error = "query_context_not_unique"; return false; }
+        matches[0]->trigger();
+        return true;
+    }
+    if (queries.size() != 1) { error = "query_not_unique"; return false; }
+    auto query = queries[0];
+    if (op == "close") {
+        auto buttons = query->window()->findChildren<QAbstractButton*>("m_pQueryClose");
+        if (buttons.size() != 1 || !buttons[0]->isVisible() || !buttons[0]->isEnabled()) {
+            error = "query_close_not_unique"; return false;
+        }
+        buttons[0]->click();
+        return true;
+    }
+    QList<QComboBox*> libraries;
+    for (auto w : QApplication::allWidgets())
+        if (w->isVisible() && w->inherits("GBQNormDBComboBox"))
+            if (auto c = qobject_cast<QComboBox*>(w)) libraries.append(c);
+    if (libraries.size() != 1 || libraries[0]->currentText() != "北京市建设工程概算消耗量标准(2025)") {
+        error = "library_mismatch"; return false;
+    }
+    out["candidate_library"] = libraries[0]->currentText();
+    if (op == "inspect") return true;
+    if (op != "search") { error = "operation_not_allowed"; return false; }
+    QList<QLineEdit*> edits;
+    for (auto e : query->findChildren<QLineEdit*>())
+        if (e->isVisible() && e->inherits("GLDHintLineEdit")) edits.append(e);
+    if (edits.size() != 1) { error = "search_editor_not_unique"; return false; }
+    edits[0]->setText(QStringLiteral(__LOOKUP_CODE__));
+    return true;
+}

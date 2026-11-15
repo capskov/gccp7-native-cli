@@ -1,28 +1,32 @@
 # 广联达 GCCP7 原生桥 CLI
 
-**面向 AI Agent 的广联达 GCCP7 原生操作底座。** 面向工程造价与概算计价任务，Agent 可以用结构化命令定位定额、套项、修改工程量、删除和读回验证。CLI 在 Windows 本机通过版本锁定的 Qt 桥调用 GCCP 自己的业务动作，保存命令意图、回执和审计证据。
+**面向 AI Agent 的广联达 GCCP7 原生操作底座。** Agent 可以用结构化命令查定额、套入并填写新行的工程量、补项、删除和读回验证。CLI 在 Windows 本机通过版本锁定的 Qt 桥调用 GCCP 自己的业务动作，并记录回执。
 
-**GCCP7 Native CLI** is an agent-oriented native command-line foundation for Glodon GCCP7 construction cost estimation. This independent developer preview supports scoped quota lookup, insertion, quantity updates, deletion and audited readback.
+**GCCP7 Native CLI** provides native quota lookup, insertion with initial quantity, supplemental items, deletion and audited readback for Glodon GCCP7.
 
 - **Agent 入口**：[命令地图](docs/agent-commands.md) · [主技能](.agents/skills/gccp7-native-cli/SKILL.md) · [llms.txt](llms.txt)
-- **首版**：`v0.1.0-alpha.1` 开发者预览 · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
+- **当前版本** `0.2.0b3`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
 
 | 入口 | 当前范围 |
 | --- | --- |
 | `gccp doctor` / `gccp bind` | 检查工具链和六个组件指纹，绑定已经打开的测试工程，构建同进程只读观察器 |
-| `gccp catalog search` | 只读检索自备 SQLite 定额索引，按编号、规格或来源核对候选 |
-| `gccp quota-run` | 北京2025管网球墨铸铁管件 3-193～3-208 家族。定位、套入、改量、原生保存及同进程回读 |
+| `gccp catalog search` | 只读检索本机安装的北京 2025 原厂索引，支持编号、名称、专业和原厂 ID |
+| `gccp quota-candidates` | 从当前北京 2025 库按编号或原厂 ID 读取软件候选 |
+| `gccp quota-run` | 精确套入、填写新增子目工程量并读回。二级分部按路径执行，自动在读回后结束 |
+| `gccp quota-clone` | 复用已套的普通定额，复制一次并逐条向下追加，改零价主材名称、填量并读回 |
+| `gccp quota-supplement` | 打开原生补充子目表单，提交零价工作量并回读，或用 `--check-only` 校验后取消 |
+| `gccp quota-short-drive-factor` | 对已选北京 2025 管网 `11-34` 应用短距离标准换算并回读 |
 | `gccp quota-delete` | 精确定位单条定额，临时删除或永久删除，识别原生单行确认框 |
 | `gccp native-inspect` / `command-status` | 同进程只读快照、审计状态及失败定位 |
 
-原生业务已在 GCCP7 x64、工程格式版本 7.5000.2.4、Qt 5.9.9 和北京2025概算环境中验证过代表场景。公开版另行验证了安装、离线契约和原生编译。新工作站上请用自己的已获授权的测试工程做首次实机验证。批量、全定额覆盖、通用调价、撤销临时删除和保存后自动关闭重开仍属后续范围。项目与广联达官方无隶属关系。
+原生业务已在一套 GCCP7 x64、工程格式 7.5000.2.4、Qt 5.9.9 和北京 2025 概算环境中实机验证。使用前以 `doctor` 检查匹配的安装路径和组件指纹。当前主流程覆盖既有分部的查项、套入并填量、补项、指定换算、单行删除和回读。已有行独立改量、分部增删改、批量调价、通用工料机换算和保存后重开属于待扩展能力。项目独立开发。
 
 ## 安装和绑定
 
-需要 Windows x64、Python 3.12+、已合法安装且与配置指纹一致的 GCCP7、MSVC x64 工具链、Windows SDK、Qt 5.9.9 x64 MSVC SDK。软件、SDK、定额数据和工程文件由使用者自行准备。用 PowerShell 在源码目录运行：
+实机操作需要 Windows x64、Python 3.12、已安装且与配置指纹一致的 GCCP7、MSVC x64 工具链、Windows SDK、Qt 5.9.9 x64 MSVC SDK。安装包声明支持 Python 3.12 及以上，本次独立安装验证使用 3.12。北京 2025 原厂子目索引由本机广联达安装提供。用 PowerShell 建立独立环境，从源码安装时运行 `pip install .`。拿到 wheel 时，将该行的 `.` 换成 wheel 的实际路径。
 
 ```powershell
-py -3.12 -m venv .venv
+python -m venv .venv
 $py = Join-Path $PWD '.venv\Scripts\python.exe'
 & $py -m pip install .
 $gccp = Join-Path $PWD '.venv\Scripts\gccp.exe'
@@ -40,24 +44,60 @@ $workcopy = 'C:\work\test-estimate.GPB7'
 $sha = (Get-FileHash -LiteralPath $workcopy -Algorithm SHA256).Hash.ToLowerInvariant()
 $binding = (& $gccp bind --state .\state --runtime-root .\runtime --workcopy $workcopy --expected-sha256 $sha) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw $binding.error.message }
-$binding.data.parents
+$binding.data | Select-Object project_id, inspector, parents
+& $gccp native-inspect --runtime $binding.data.inspector
 ```
 
 绑定只对选定的已打开工程建立只读观察器。业务调用复用同一 `state` 目录。进程重建后重新绑定，未决命令先核对旧回执。若应用另存或后台保存改变了文件身份，先保留原账本和当前工程，按[诊断说明](docs/diagnostics.md)处理。
 
+`parents` 只列有业务 ID 的顶层分部，可能为空。二级分部的完整名称从预算树读回，套项时从顶层开始逐级传入 `--parent-section`。
+
 ## 单条业务
 
-参照 [SQLite 字段](examples/catalog-schema.sql)准备本地定额索引。候选条目仍以软件中的实际定额为准。
+遇到多种构件适用同一定额时，可先核对既有预算，再用 [定额复用](docs/quota-reuse.md) 批量追加主材变体。是否复用以专业、定额工作内容和计量单位为准。
+
+### 用广联达现场候选套项
+
+按编号读取软件当前库的结果。根据业务选定候选，把四项原样传给执行器。示例值需替换为实际回读值。
 
 ```powershell
-& $gccp catalog search --db .\catalog.sqlite --code 3-201 --specialty 管网 --spec 700
-# 将示例父项、条目 ID 和命令号改成你的绑定及检索结果。
-& $gccp quota-run --db .\catalog.sqlite --state .\state --runtime-root .\runtime `
-  --inspector $binding.data.inspector --project-id $binding.data.project_id `
-  --parent-id 'TEST-PARENT' --entry-id 1 --quantity 2 --command-id 'demo-add-001'
+& $gccp quota-candidates --state ./state --runtime-root ./runtime --project-id $binding.data.project_id --code '目标编号'
+& $gccp quota-run --state ./state --runtime-root ./runtime --inspector $binding.data.inspector --project-id $binding.data.project_id --parent-id '实际父项ID' --no-save --quantity 2 --command-id 'live-add-001' --candidate-code '实际编号' --candidate-name '候选完整名称' --candidate-unit '候选单位' --candidate-specialty '候选专业'
 ```
 
-`quota-run` 会触发原生保存，目标父项需是唯一、非空的顶层分部。插入后的零工程量、零材料价是正常值。传给改量步骤的目标工程量须为正数且最多四位小数。定额的名称和单位以回读为准。
+候选来自广联达现场。套入前会再次核对当前库和唯一精确候选。遇到身份歧义、未知对话框或读回失败，程序阻断或保留原命令待核。北京 2025 管网、市政通用和轨道土建已有代表子目实机回读，具体范围见[实机验证记录](docs/architecture.md)。
+
+### 用本机安装的原厂索引套项
+
+先查原厂子目 ID，再用它套项。CLI 会核对现场唯一匹配的定额和实际计量单位。索引更新见[定额库工作流程](docs/catalog-workflow.md)。
+
+```powershell
+& $gccp catalog search --code 4-102 --specialty 轨道
+# 在“整个项目”视图选中目标分部末尾的空白行或上一条定额。
+# 将分部名、原厂 ID、数量、单位和命令号换成实际值。
+& $gccp quota-run --state .\state --runtime-root .\runtime `
+  --inspector $binding.data.inspector --project-id $binding.data.project_id `
+  --parent-section '一级分部名称' --parent-section '二级分部名称' `
+  --selected-anchor --vendor-id 10413 --expect-unit t --quantity 2 --command-id 'demo-add-001'
+```
+
+常规套项核对回执后，由操作者或广联达自身安排保存。二级分部路径自动采用 `--no-save`，旧命令仍可显式传入。使用 `--parent-id` 时显式加 `--no-save` 采用同一流程，省略时保留原有保存行为。目标工程量须为正数，最多四位小数。定额名称和单位以现场回读为准。
+
+### 补充子目
+
+在“整个项目”视图选中目标分部内的一条直接子目。第一次先用校验模式试通表单。确认工程、名称和数量后，正式调用去掉 `--check-only`。
+
+```powershell
+& $gccp quota-supplement --state .\state --runtime-root .\runtime `
+  --inspector $binding.data.inspector --project-id $binding.data.project_id `
+  --parent-section '一级分部名称' --parent-section '二级分部名称' `
+  --code '补DEMO-01' --name '经核定的补充子目名称' --unit 套 --quantity 2 `
+  --command-id 'demo-supplement-001' --check-only
+```
+
+正式调用用广联达原生动作打开表单、填入零价工作量并回读预算，由操作者安排保存。其他业务和回执见[命令地图](docs/agent-commands.md)。
+
+### 单条删除
 
 删除时输入精确父项、编号、名称和单位。示例用 `temporary`，永久删除用 `permanent`。删除命令返回同进程回读，工程保存由操作者安排。
 
@@ -75,7 +115,7 @@ $binding.data.parents
 
 ## 给智能体使用
 
-Codex 在此仓库中可发现 `.agents/skills/gccp7-native-cli`。在 Codex 对话中用 `$gccp7-native-cli` 明确调用。其他支持 Agent Skills 的工具可加载同一目录，按其技能安装规则注册。
+Codex 在此仓库中可发现 `.agents/skills` 内的主技能和定额复用技能。跨项目使用时，将发布包中的两个技能目录解压到 Codex 用户技能目录，通常是 `%USERPROFILE%\.codex\skills`。技能和 Python wheel 分别安装。新对话可直接说“用 CLI 操作当前广联达概算”，也可输入 `$gccp7-quota-reuse` 指定复用流程。
 
 可以把仓库链接和这条任务交给 Agent：
 

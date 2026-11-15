@@ -1,0 +1,249 @@
+{
+  "source": {
+    "filename": "07轨道交通第一册.pdf",
+    "sha256": "2d6165e0fa906ccdea26d09f8174a2912e496f05b4190b3061c044c235708ea9",
+    "url": "https://zjw.beijing.gov.cn/bjjs/xxgk/zcwj2024/qtzcwj/xxyx13/743876492/07%E8%BD%A8%E9%81%93%E4%BA%A4%E9%80%9A%E7%AC%AC%E4%B8%80%E5%86%8C.pdf"
+  },
+  "reviewed_at": "2026-11-08",
+  "reason": "顶管实战复核官方 PDF 子目表。按编号逐列拆分合并名称，补齐表头明确的井深、土类和适用部位。",
+  "entries": [
+    {
+      "code": "1-26",
+      "pdf_page": 34,
+      "before": {
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "spec": "≤20m 一、二类土",
+        "spec_descriptor": "井深与土类"
+      }
+    },
+    {
+      "code": "1-27",
+      "pdf_page": 34,
+      "before": {
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "spec": "≤20m 三类土",
+        "spec_descriptor": "井深与土类"
+      }
+    },
+    {
+      "code": "1-28",
+      "pdf_page": 34,
+      "before": {
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "spec": "≤20m 四类土",
+        "spec_descriptor": "井深与土类"
+      }
+    },
+    {
+      "code": "1-29",
+      "pdf_page": 34,
+      "before": {
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "spec": "≤40m 一、二类土",
+        "spec_descriptor": "井深与土类"
+      }
+    },
+    {
+      "code": "1-30",
+      "pdf_page": 34,
+      "before": {
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "spec": "≤40m 三类土",
+        "spec_descriptor": "井深与土类"
+      }
+    },
+    {
+      "code": "1-31",
+      "pdf_page": 34,
+      "before": {
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "spec": "≤40m 四类土",
+        "spec_descriptor": "井深与土类"
+      }
+    },
+    {
+      "code": "4-49",
+      "pdf_page": 157,
+      "before": {
+        "name": "竖井喷射混凝土 二衬混凝土"
+      },
+      "after": {
+        "name": "竖井喷射混凝土"
+      }
+    },
+    {
+      "code": "4-50",
+      "pdf_page": 157,
+      "before": {
+        "name": "竖井喷射混凝土 二衬混凝土"
+      },
+      "after": {
+        "name": "二衬混凝土"
+      }
+    },
+    {
+      "code": "4-98",
+      "pdf_page": 175,
+      "before": {
+        "name": "连接筋 钢筋格栅 型钢格栅",
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "name": "连接筋",
+        "spec": "竖井",
+        "spec_descriptor": "适用部位"
+      }
+    },
+    {
+      "code": "4-99",
+      "pdf_page": 175,
+      "before": {
+        "name": "连接筋 钢筋格栅 型钢格栅",
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "name": "连接筋",
+        "spec": "暗挖",
+        "spec_descriptor": "适用部位"
+      }
+    },
+    {
+      "code": "4-100",
+      "pdf_page": 175,
+      "before": {
+        "name": "连接筋 钢筋格栅 型钢格栅",
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "name": "钢筋格栅",
+        "spec": "竖井",
+        "spec_descriptor": "适用部位"
+      }
+    },
+    {
+      "code": "4-101",
+      "pdf_page": 175,
+      "before": {
+        "name": "连接筋 钢筋格栅 型钢格栅",
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "name": "钢筋格栅",
+        "spec": "暗挖、盖挖",
+        "spec_descriptor": "适用部位"
+      }
+    },
+    {
+      "code": "4-102",
+      "pdf_page": 175,
+      "before": {
+        "name": "连接筋 钢筋格栅 型钢格栅",
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "name": "型钢格栅",
+        "spec": "竖井",
+        "spec_descriptor": "适用部位"
+      }
+    },
+    {
+      "code": "4-103",
+      "pdf_page": 175,
+      "before": {
+        "name": "连接筋 钢筋格栅 型钢格栅",
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "name": "型钢格栅",
+        "spec": "暗挖、盖挖",
+        "spec_descriptor": "适用部位"
+      }
+    },
+    {
+      "code": "4-104",
+      "pdf_page": 176,
+      "before": {
+        "name": "钢筋网片"
+      },
+      "after": {
+        "name": "竖井网片"
+      }
+    },
+    {
+      "code": "4-105",
+      "pdf_page": 176,
+      "before": {
+        "spec": null,
+        "spec_descriptor": null
+      },
+      "after": {
+        "spec": "暗挖、盖挖",
+        "spec_descriptor": "适用部位"
+      }
+    },
+    {
+      "code": "5-8",
+      "pdf_page": 193,
+      "before": {
+        "name": "基础、护底 墩台 挡墙 零星砌砖"
+      },
+      "after": {
+        "name": "基础、护底"
+      }
+    },
+    {
+      "code": "5-9",
+      "pdf_page": 193,
+      "before": {
+        "name": "基础、护底 墩台 挡墙 零星砌砖"
+      },
+      "after": {
+        "name": "墩台"
+      }
+    },
+    {
+      "code": "5-10",
+      "pdf_page": 193,
+      "before": {
+        "name": "基础、护底 墩台 挡墙 零星砌砖"
+      },
+      "after": {
+        "name": "挡墙"
+      }
+    },
+    {
+      "code": "5-11",
+      "pdf_page": 193,
+      "before": {
+        "name": "基础、护底 墩台 挡墙 零星砌砖"
+      },
+      "after": {
+        "name": "零星砌砖"
+      }
+    }
+  ]
+}

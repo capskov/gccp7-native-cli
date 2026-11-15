@@ -75,7 +75,11 @@ class NativeBridge:
             while not receipt.exists() and time.monotonic()<deadline:
                 # Read-only wait for this exact nonce, not a new request.
                 alive=W.DWORD()
-                if not K.GetExitCodeProcess(handle,C.byref(alive)) or alive.value!=259:raise RuntimeError('Target exited; stop')
+                if not K.GetExitCodeProcess(handle,C.byref(alive)):
+                    raise C.WinError(C.get_last_error())
+                if alive.value!=259:
+                    record['target_exit_code']=f'0x{alive.value:08X}'
+                    raise RuntimeError(f'Target exited during {operation} ({record["target_exit_code"]}); no replay')
                 time.sleep(.2)
             if not receipt.exists():raise TimeoutError('Native result pending/unknown; no repeat')
             result=json.loads(receipt.read_text(encoding='utf-8'));record['receipt']=result
@@ -84,5 +88,8 @@ class NativeBridge:
         except Exception as e:
             record['error']=type(e).__name__+': '+str(e);raise
         finally:
+            if operation=='prepare':
+                record['prepare_stages']=[p.stem.split('.prepare-',1)[1]
+                                          for p in sorted(BUILD.glob(nonce+'.prepare-*.stage'))]
             if allocation and loaded:K.VirtualFreeEx(handle,allocation,0,0x8000)
             K.CloseHandle(handle);write_new(output.with_suffix('.result.json'),record);self.records.append(str(output.with_suffix('.result.json')))

@@ -11,7 +11,7 @@ import uuid
 import zipfile
 
 from gccp_foundation.application.native_cli import Rejected, digest, encoded, initialize_commands
-from gccp_foundation.application.native_runtime import _replace, render_transport
+from gccp_foundation.application.native_runtime import _replace, normalize_quantity, render_transport
 from gccp_foundation.application.native_build import TEMPLATES, compile_bridge, profile_path
 from gccp_foundation.application.native_worker_support import (
     Ledger, RuntimeProfile, SessionManager, WindowsDesktop, execution_lock, file_sha256, project_window_prefix, rows, table,
@@ -31,12 +31,14 @@ def build_bridge(directory, profile, session, title, request, *, confirm_only=Fa
     generated = render_transport(templates, directory, request['command_id'], session, profile, title)
     action, label = ACTIONS[request['mode']]
     constants = {
-        'kParent': request['parent_id'], 'kCode': request['code'], 'kName': request['name'],
+        'kParent': request['parent_id'] or '', 'kCode': request['code'], 'kName': request['name'],
         'kUnit': request['unit'], 'kAction': action, 'kActionText': label,
     }
     header = ''.join(f'static const QString {name} = QStringLiteral({json.dumps(value, ensure_ascii=False)});\n'
                      for name, value in constants.items())
     header += f'static constexpr bool kConfirmOnly = {str(confirm_only).lower()};\n'
+    sections = ', '.join(json.dumps(name, ensure_ascii=False) for name in request.get('parent_sections', []))
+    header += 'static const QStringList kSections{' + sections + '};\n'
     generated['operations.h'] = header + (templates/'delete.h.in').read_text(encoding='utf-8')
     generated['bridge.cpp'] = _replace(generated['bridge.cpp'],
         'QStringList{"insert","material.confirm","note.commit","quantity.commit","name.set","quantity.set","quantity.normal.zero","quantity.normal.one","save"}.contains(op)',
@@ -69,7 +71,8 @@ def verified_delta(before, after, mode):
         post = after['target']
         if post['path'] != path or not any(post['strikeout']) or post['values'][:4] != target['values'][:4]:
             raise ValueError('Retained row has no verified temporary-delete marker')
-    affected = ['/0', parent]
+    segments = path.strip('/').split('/')
+    affected = ['/' + '/'.join(segments[:depth]) for depth in range(1, len(segments))]
     old_outside = {k: r for k, r in old.items() if k != path and not k.startswith(path+'/')}
     new_outside = {}
     for k, row in new.items():
@@ -98,9 +101,18 @@ def verified_delta(before, after, mode):
 
 
 def delete_quota(state, runtime_root, request):
-    for name in ('command_id', 'parent_id'):
-        if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', request[name]):
-            raise Rejected('IDENTIFIER_INVALID', f'Explicit bounded {name} required')
+    if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', request['command_id']):
+        raise Rejected('IDENTIFIER_INVALID', 'Explicit bounded command_id required')
+    sections = request.get('parent_sections')
+    if sections is not None:
+        if (request['parent_id'] is not None or not 1 <= len(sections) <= 10
+                or any(not value.strip() or len(value) > 240 or any(ord(ch) < 32 for ch in value)
+                       for value in sections)
+                or request.get('expected_quantity') is None):
+            raise Rejected('DELETE_SCOPE_INVALID', 'Section path and exact displayed quantity required')
+        request['expected_quantity'] = normalize_quantity(request['expected_quantity'])
+    elif not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', request['parent_id'] or ''):
+        raise Rejected('IDENTIFIER_INVALID', 'Explicit bounded parent_id required')
     for name in ('code', 'name', 'unit'):
         value = request[name]
         if not value.strip() or len(value) > 256 or any(ord(ch) < 32 for ch in value):
@@ -140,7 +152,7 @@ def delete_quota(state, runtime_root, request):
             directory = Path(runtime_root).resolve()/'delete'/scope/uuid.uuid4().hex[:12]
             bridge = build_bridge(directory, profile, meta['session'], project_window_prefix(meta['workcopy_path']), request)
             before = bridge.call('inspect', timeout=30)
-            table(before, '工程量表达式')
+            budget = table(before, '工程量表达式')
             if before['modals']:
                 raise Rejected('DELETE_WINDOW_BLOCKED', 'A modal dialog is visible. Inspect it before deleting.')
             if before['target_matches'] != 1:
@@ -150,6 +162,12 @@ def delete_quota(state, runtime_root, request):
                    for item in before['delete_actions']) != 1:
                 raise Rejected('DELETE_ACTION_UNAVAILABLE', 'The reviewed budget action is not available')
             target = before['target']
+            if sections is not None:
+                current = budget['current']
+                if (current.get('verified') is not True or current.get('row_path_session_only') != target['path']
+                        or current.get('values') != target['values']
+                        or target['values'][6] != request['expected_quantity']):
+                    raise Rejected('DELETE_TARGET_NOT_CURRENT', 'Current exact quota and its expected quantity are required')
             if mode == 'temporary' and any(target['strikeout']):
                 raise Rejected('ALREADY_TEMPORARY_DELETED', 'Use a fresh readback to inspect the existing temporary deletion')
             intent = 'intent.'+uuid.uuid4().hex

@@ -4,12 +4,50 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+import zipfile
 
+from gccp_foundation.application.native_worker_support import file_sha256, wait_for_saved_workcopy
 from gccp_foundation.application.ports import SessionContext
 from gccp_foundation.domain.errors import ContractError
 from gccp_foundation.storage import Ledger
 from gccp_foundation.storage.ledger import encoded
 from gccp_foundation.storage.native_save_attempts import NativeSaveAttempts
+
+
+class NativeSaveFileWaitTests(unittest.TestCase):
+    def test_waits_for_complete_changed_file_and_two_matching_observations(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'workcopy.GPB7'
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('project', 'before')
+            before = file_sha256(path)
+            now = 0
+
+            def sleep(seconds):
+                nonlocal now
+                now += seconds
+                if now == 4:
+                    path.write_bytes(b'incomplete archive')
+                if now == 12:
+                    with zipfile.ZipFile(path, 'w') as archive:
+                        archive.writestr('project', 'saved')
+
+            with patch('gccp_foundation.application.native_worker_support.time.monotonic', side_effect=lambda: now), \
+                 patch('gccp_foundation.application.native_worker_support.time.sleep', side_effect=sleep):
+                self.assertEqual(wait_for_saved_workcopy(path, before, timeout=20), file_sha256(path))
+            self.assertEqual(now, 16)
+
+    def test_timeout_preserves_unknown_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'workcopy.GPB7'
+            path.write_bytes(b'unchanged')
+            before = file_sha256(path)
+            with patch('gccp_foundation.application.native_worker_support.time.monotonic', side_effect=[0, 0, 0, 4]), \
+                 patch('gccp_foundation.application.native_worker_support.time.sleep') as sleep:
+                with self.assertRaisesRegex(TimeoutError, 'without replay'):
+                    wait_for_saved_workcopy(path, before, timeout=4)
+            sleep.assert_called_once_with(4)
 
 
 class NativeSaveJournal(unittest.TestCase):

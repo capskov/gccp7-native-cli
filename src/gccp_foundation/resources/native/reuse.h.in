@@ -1,0 +1,172 @@
+#include <QLineEdit>
+#include <QMetaMethod>
+#include <QPersistentModelIndex>
+#include <QKeyEvent>
+#include <QContextMenuEvent>
+#include <QAbstractScrollArea>
+#include <QTimer>
+#pragma comment(lib, "User32.lib")
+
+static bool editReuseCell(QWidget *widget, const QModelIndex &cell, const QString &value,
+                          QJsonObject &out, QString &error) {
+    if (!QApplication::focusWidget()) {
+        auto model = const_cast<QAbstractItemModel*>(cell.model());
+        if (!cell.isValid() || !model || !(cell.flags() & Qt::ItemIsEditable)) {
+            error = "reuse_edit_precondition"; return false;
+        }
+        out["business_dispatches"] = 1;
+        if (!model->setData(cell, value, Qt::EditRole)) {
+            error = "reuse_model_write_rejected"; return false;
+        }
+        return true;
+    }
+    const auto meta = widget->metaObject();
+    const int nav = meta->indexOfMethod("setCurrentIndex(QModelIndex)");
+    const int edit = meta->indexOfMethod("edit(QModelIndex)");
+    if (nav < 0 || edit < 0 || !(cell.flags() & Qt::ItemIsEditable)
+            || QString(meta->method(nav).enclosingMetaObject()->className()) != "GSPTableView"
+            || QString(meta->method(edit).enclosingMetaObject()->className()) != "GLDGSPTableView"
+            || !meta->method(nav).invoke(widget, Qt::DirectConnection, Q_ARG(QModelIndex, cell))) {
+        error = "reuse_editor_precondition"; return false;
+    }
+    widget->setFocus(Qt::OtherFocusReason);
+    bool opened = false;
+    if (!meta->method(edit).invoke(widget, Qt::DirectConnection, Q_RETURN_ARG(bool, opened),
+                                  Q_ARG(QModelIndex, cell)) || !opened) {
+        error = "reuse_editor_not_open"; return false;
+    }
+    auto focused = QApplication::focusWidget();
+    auto line = qobject_cast<QLineEdit*>(focused);
+    if (!line || !widget->isAncestorOf(line) || line->text() != cell.data().toString()) {
+        error = "reuse_editor_unverified"; return false;
+    }
+    line->setText(value);
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    out["business_dispatches"] = 1;
+    QApplication::sendEvent(line, &enter);
+    return true;
+}
+
+static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
+    const auto op = req["operation"].toString();
+    auto module = GetModuleHandleW(L"GLDTableView.dll");
+    auto modelGetter = reinterpret_cast<QAbstractItemModel* (__fastcall *)(const void*)>(
+        GetProcAddress(module, "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
+    auto selectionGetter = reinterpret_cast<QItemSelectionModel* (__fastcall *)(const void*)>(
+        GetProcAddress(module, "?selectionModel@GlodonAbstractItemView@@QEBAPEAVGLDItemSelectionModel@@XZ"));
+    auto currentGetter = GetProcAddress(module, "?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
+    QWidget *budget = nullptr, *resource = nullptr, *frame = nullptr;
+    QAbstractItemModel *model = nullptr, *resourceModel = nullptr;
+    int budgets = 0, resources = 0;
+    if (!modelGetter || !selectionGetter || !currentGetter) { error = "reuse_getters_missing"; return false; }
+    for (auto w : QApplication::allWidgets()) {
+        if (!w->isVisible() || !w->inherits("GTPGSPTableView")) continue;
+        auto view = w->qt_metacast("GlodonAbstractItemView");
+        auto m = view ? modelGetter(view) : nullptr;
+        if (!m || m->thread() != qApp->thread() || m->columnCount() != 13) continue;
+        if (m->headerData(4, Qt::Horizontal).toString() == "工程量表达式") {
+            ++budgets; budget = w; model = m;
+            frame = w->parentWidget();
+            while (frame && !frame->inherits("GBEBQGridFrame")) frame = frame->parentWidget();
+        }
+        if (m->headerData(3, Qt::Horizontal).toString() == "规格及型号"
+                && m->headerData(8, Qt::Horizontal).toString() == "市场价") {
+            ++resources; resource = w; resourceModel = m;
+        }
+    }
+    QJsonArray actions;
+    QAction *copy = nullptr, *paste = nullptr;
+    int copies = 0, pastes = 0;
+    if (budgets == 1 && frame) {
+        for (auto action : frame->actions()) {
+            const auto name = action->objectName();
+            if (name == "Copy" && action->text() == "复制") { copy = action; ++copies; }
+            else if (name == "Paste" && action->text() == "粘贴") { paste = action; ++pastes; }
+            else continue;
+            actions.append(QJsonObject{{"name", name}, {"enabled", action->isEnabled()}, {"visible", action->isVisible()}});
+        }
+    }
+    out["reuse_actions"] = actions;
+    if (op == "inspect") return true;
+    if (budgets != 1 || !frame || QApplication::activeModalWidget()
+            || (op != "reuse.paste" && QApplication::activePopupWidget())) {
+        error = "reuse_budget_context"; return false;
+    }
+    auto view = budget->qt_metacast("GlodonAbstractItemView");
+    auto cursor = readPinnedCurrentIndex(view, reinterpret_cast<const void*>(currentGetter));
+    auto row = cursor.sibling(cursor.row(), 0);
+    const auto target = req["expected_target"].toObject();
+    const auto evidence = currentIndexEvidence(model, row);
+    if (!evidence["verified"].toBool() || evidence["row_path_session_only"] != target["path"]
+            || evidence["values"] != target["quota"]) { error = "reuse_selected_quota_changed"; return false; }
+    static DWORD copiedSequence = 0;
+    static bool copyDone = false, pasted = false, renamed = false, quantified = false;
+    if (op == "reuse.menu" && copyDone && (!pasted || renamed)
+            && copiedSequence == GetClipboardSequenceNumber()) {
+        auto area = qobject_cast<QAbstractScrollArea*>(budget);
+        auto tableView = budget->qt_metacast("GLDTableView");
+        const auto rect = GetProcAddress(module, "?visualRect@GLDTableView@@UEBA?AVQRect@@AEBVQModelIndex@@@Z");
+        if (!area || !tableView || !rect) { error = "reuse_menu_viewport_missing"; return false; }
+        QRect (PinnedGlodonViewAbi::*visualRect)(const QModelIndex&) const;
+        static_assert(sizeof(visualRect) == sizeof(rect), "Requires the pinned MSVC x64 member ABI");
+        std::memcpy(&visualRect, &rect, sizeof(visualRect));
+        auto viewport = area->viewport();
+        const auto point = (static_cast<const PinnedGlodonViewAbi*>(tableView)->*visualRect)(cursor).center();
+        if (!viewport || !viewport->rect().contains(point)) { error = "reuse_menu_cell_not_visible"; return false; }
+        QPointer<QWidget> owner(viewport);
+        QTimer::singleShot(0, viewport, [owner, point]() {
+            if (!owner || QApplication::activePopupWidget() || QApplication::activeModalWidget()) return;
+            QContextMenuEvent menu(QContextMenuEvent::Mouse, point, owner->mapToGlobal(point));
+            QApplication::sendEvent(owner, &menu);
+        });
+        return true;
+    }
+    if (op == "reuse.copy" || op == "reuse.paste") {
+        const bool copying = op == "reuse.copy";
+        auto action = copying ? copy : paste;
+        auto popup = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        if (popup && !popup->actions().contains(action)) { error = "reuse_paste_menu_mismatch"; return false; }
+        auto selection = selectionGetter(view);
+        if (!action || (copying ? copies : pastes) != 1 || !action->isEnabled() || !action->isVisible()
+                || !selection || selection->model() != model
+                || (copying ? copyDone : (!copyDone || (pasted && !renamed)
+                    || copiedSequence != GetClipboardSequenceNumber()))) {
+            error = "reuse_clipboard_or_action_precondition"; return false;
+        }
+        if (!popup) budget->setFocus(Qt::OtherFocusReason);
+        selection->select(row, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        const auto selected = selection->selectedRows();
+        if (selected.size() != 1 || selected[0] != row) { error = "reuse_row_not_exclusive"; return false; }
+        const auto priorSequence = GetClipboardSequenceNumber();
+        if (copying) copyDone = true;
+        else { pasted = true; renamed = false; quantified = false; }
+        out["business_dispatches"] = copying ? 0 : 1;
+        action->trigger();
+        if (popup && QApplication::activePopupWidget() == popup) popup->close();
+        if (copying) {
+            copiedSequence = GetClipboardSequenceNumber();
+            out["copy_verified"] = copiedSequence != priorSequence;
+        }
+        return true;
+    }
+    if (!pasted) { error = "reuse_no_paste"; return false; }
+    if (op == "reuse.rename" && !renamed && resources == 1 && resourceModel->rowCount() <= 500) {
+        QModelIndex cell;
+        int matches = 0;
+        for (int r = 0; r < resourceModel->rowCount(); ++r) {
+            const auto material = resourceModel->index(r, 0);
+            QJsonArray values;
+            for (int c = 0; c < 13; ++c) values.append(material.sibling(r, c).data().toString());
+            if (values != target["resource"].toArray()) continue;
+            cell = material.sibling(r, 2); ++matches;
+        }
+        if (matches != 1) { error = "reuse_resource_not_unique"; return false; }
+        renamed = true;
+        return editReuseCell(resource, cell, target["value"].toString(), out, error);
+    }
+    if (op == "reuse.quantity" && renamed && !quantified) {
+        quantified = true;
+        return editReuseCell(budget, row.sibling(row.row(), 4), target["value"].toString(), out, error);
+    }
+    error = "reuse_operation_not_available"; return false;
+}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gccp7-native-cli"
-version = "0.1.0a1"
+version = "0.2.0b3"
 description = "A scoped native command-line bridge for GCCP7"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,4 +18,4 @@ gccp = "gccp_foundation.application.native_cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-gccp_foundation = ["resources/*.json", "resources/native/*", "resources/profiles/*.json"]
+gccp_foundation = ["resources/*.json", "resources/catalog/*.json", "resources/native/*", "resources/profiles/*.json"]

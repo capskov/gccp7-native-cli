@@ -1,11 +1,22 @@
 # GCCP7 Native CLI
 
-> Agent-oriented native operation foundation for Glodon GCCP7. Windows x64 command-line automation for scoped quota lookup, insertion, quantity updates, deletion and audited readback.
+> Agent-oriented native operation foundation for Glodon GCCP7. Windows x64 command-line automation for quota lookup, insertion with initial quantity, supplemental items, deletion and audited readback.
 
 面向 AI Agent 的广联达 GCCP7 智能操作底座，适用于已验证范围内的北京2025概算定额业务。
+
+“用 CLI 操作广联达概算”“原生桥”“中间桥”均从下列技能进入。常规写入走本机 `gccp`，读回后由操作者或广联达安排保存。
 
 - [README](README.md): Setup, toolchain, scope and usage examples.
 - [Agent command map](docs/agent-commands.md): Inputs, effects, JSON results and how to proceed.
 - [Agent Skill](.agents/skills/gccp7-native-cli/SKILL.md): Reusable GCCP7 operation instructions for AI agents.
 - [Diagnostics](docs/diagnostics.md): Read-only recovery and original command receipts.
 - [Architecture](docs/architecture.md): Native execution, safety boundaries and verified cases.
+
+## 0.2.0b3 操作入口
+
+1. 用 `doctor` 核实本机工具链，用 `bind` 绑定已打开且路径明确的 GPB7。记录工程 ID、账本和 inspector，用 `native-inspect` 核对项目与分部。
+2. 新套项先用 `catalog search` 查北京 2025 子目，再用 `quota-candidates` 确认现场唯一候选及单位。通过 `quota-run` 套入并填初始工程量。分部路径用实际名称逐级指定。
+3. 已有定额需要复制出多个同工艺主材时，用 `quota-reuse-plan` 先查重，再用 `quota-clone` 按变体追加。仅需修正已有主材时，用 `material-edit`，无需先复制定额。
+4. `material-edit` 每次改名称或含量一格。输入现场主材路径、编码、原值及父定额身份。先用 `--check-only` 预检。改名后重读编码，含量编辑后核对材料总量以及关联定额费用。定额名称保留原厂名称，规格写在主材名称中。
+5. 零价补项用 `quota-supplement`，单条核实并删除用 `quota-delete`，北京 2025 管网 11-34 短顶距换算用专用命令。未知回执先查 `command-status` 和只读快照，保留原命令号。
+6. 将读回和保存分别确认。尚未覆盖通用存量定额工程量编辑、独立规格字段写入、批量调价和任意换算。

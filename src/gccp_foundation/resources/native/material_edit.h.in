@@ -1,0 +1,51 @@
+static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
+    const auto op = req["operation"].toString();
+    if (op == "inspect") return true;
+    if (op != "material.check" && op != "material.edit") { error = "operation_not_allowed"; return false; }
+    if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
+        error = "dialog_or_popup_active"; return false;
+    }
+    auto module = GetModuleHandleW(L"GLDTableView.dll");
+    auto getter = reinterpret_cast<QAbstractItemModel* (__fastcall *)(const void*)>(
+        GetProcAddress(module, "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
+    QAbstractItemModel *model = nullptr;
+    int count = 0;
+    if (getter) for (auto widget : QApplication::allWidgets()) {
+        if (!widget->isVisible() || !widget->inherits("GTPGSPTableView")) continue;
+        auto view = widget->qt_metacast("GlodonAbstractItemView");
+        auto candidate = view ? getter(view) : nullptr;
+        if (candidate && candidate->thread() == qApp->thread() && candidate->columnCount() == 13
+                && candidate->headerData(4, Qt::Horizontal).toString() == "工程量表达式") {
+            model = candidate; ++count;
+        }
+    }
+    if (count != 1) { error = "budget_not_unique"; return false; }
+    const auto target = req["expected_target"].toObject();
+    QModelIndex row;
+    for (const auto &part : target["path"].toString().split('/', QString::SkipEmptyParts)) {
+        bool ok = false;
+        const int index = part.toInt(&ok);
+        if (!ok || index < 0 || index >= model->rowCount(row)) { error = "invalid_row_path"; return false; }
+        row = model->index(index, 0, row);
+    }
+    if (!row.isValid() || !row.parent().isValid()) { error = "invalid_material_row"; return false; }
+    if (currentIndexEvidence(model, row)["values"] != target["material"]
+            || currentIndexEvidence(model, row.parent())["values"] != target["quota"]
+            || row.sibling(row.row(), 1).data().toString() != "主") {
+        error = "material_identity_changed"; return false;
+    }
+    const int col = target["column"].toInt(-1);
+    if (col != 2 && col != 5) { error = "invalid_material_column"; return false; }
+    auto cell = row.sibling(row.row(), col);
+    out["editable"] = bool(cell.flags() & Qt::ItemIsEditable);
+    if (!out["editable"].toBool()) { error = "material_field_not_editable"; return false; }
+    if (op == "material.check") return true;
+    static bool dispatched = false;
+    if (dispatched || !prepareStage(req, "01-before-material-edit", error)) return false;
+    dispatched = true;
+    out["business_dispatches"] = 1;
+    const bool accepted = model->setData(cell, target["value"].toString(), Qt::EditRole);
+    out["setter_accepted"] = accepted;
+    if (!accepted) { error = "material_setter_rejected"; return false; }
+    return true;
+}

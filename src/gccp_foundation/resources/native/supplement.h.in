@@ -1,0 +1,147 @@
+#include <QAbstractButton>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QTimer>
+
+template<class T> static T *oneVisible(QWidget *parent, const QString &name) {
+    T *result = nullptr;
+    for (auto child : parent->findChildren<T*>(name)) {
+        if (!child->isVisible()) continue;
+        if (result) return nullptr;
+        result = child;
+    }
+    return result;
+}
+
+static QWidget *supplementDialog(int &dialogs, int &otherModals) {
+    QWidget *dialog = nullptr;
+    for (auto window : QApplication::topLevelWidgets()) {
+        if (!window->isVisible()) continue;
+        if (window->windowTitle() == "补充子目" && window->inherits("GBQCustomTitleDialog")
+                && window->objectName() == "BorderFrame") { dialog = window; ++dialogs; }
+        else if (window->isModal()) ++otherModals;
+    }
+    return dialog;
+}
+
+static QWidget *boundBudget(const QJsonValue &expected) {
+    auto module = GetModuleHandleW(L"GLDTableView.dll");
+    auto modelGetter = reinterpret_cast<QAbstractItemModel* (__fastcall *)(const void*)>(
+        GetProcAddress(module, "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
+    auto currentGetter = GetProcAddress(module, "?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
+    if (!modelGetter || !currentGetter) return nullptr;
+    QJsonObject current;
+    QWidget *budget = nullptr;
+    int budgets = 0;
+    for (auto widget : QApplication::allWidgets()) {
+        if (!widget->isVisible() || !widget->inherits("GTPGSPTableView")) continue;
+        const auto view = widget->qt_metacast("GlodonAbstractItemView");
+        const auto model = view ? modelGetter(view) : nullptr;
+        if (!model || model->thread() != qApp->thread() || model->columnCount() != 13
+                || model->headerData(4, Qt::Horizontal).toString() != "工程量表达式") continue;
+        ++budgets;
+        budget = widget;
+        current = currentIndexEvidence(model, readPinnedCurrentIndex(view, reinterpret_cast<const void*>(currentGetter)));
+    }
+    return budgets == 1 && current["verified"].toBool() && current["row_path_session_only"] == kAnchor
+        && current["values"] == expected ? budget : nullptr;
+}
+
+static QAction *supplementAction(QWidget *budget) {
+    auto frame = budget->parentWidget();
+    while (frame && !frame->inherits("GBEBQGridFrame")) frame = frame->parentWidget();
+    if (!frame || !frame->isVisible()) return nullptr;
+    QAction *result = nullptr;
+    for (auto action : frame->actions()) {
+        if (action->objectName() != "MakeUpNormItem" || action->text() != "子目"
+                || !action->isEnabled() || !action->isVisible() || action->thread() != qApp->thread()) continue;
+        if (result) return nullptr;
+        result = action;
+    }
+    return result;
+}
+
+static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
+    const auto op = req["operation"].toString();
+    int dialogs = 0, otherModals = 0;
+    const auto dialog = supplementDialog(dialogs, otherModals);
+    out["supplement_dialogs"] = dialogs;
+    out["other_modals"] = otherModals;
+    if (op == "inspect") return true;
+    if (op != "supplement.open" && op != "supplement.check" && op != "supplement.commit") {
+        error = "operation_not_allowed"; return false;
+    }
+    const auto expected = req["expected_target"];
+    auto budget = boundBudget(expected);
+    if (!budget) {
+        error = "supplement_budget_anchor_changed";
+        return false;
+    }
+    if (op == "supplement.open") {
+        auto action = supplementAction(budget);
+        if (dialogs || otherModals || QApplication::activePopupWidget() || !action) {
+            error = "supplement_open_precondition_failed"; return false;
+        }
+        static bool queued = false;
+        if (queued) { error = "supplement_open_already_queued"; return false; }
+        queued = true;
+        const QPointer<QWidget> owner(budget);
+        const QPointer<QAction> opener(action);
+        // Opening can run a nested modal loop. Return the queued receipt first.
+        QTimer::singleShot(0, action, [owner, opener, expected]() {
+            int dialogs = 0, otherModals = 0;
+            supplementDialog(dialogs, otherModals);
+            if (!dialogs && !otherModals && !QApplication::activePopupWidget()
+                    && owner && opener && boundBudget(expected) == owner
+                    && supplementAction(owner) == opener)
+                opener->trigger();
+        });
+        out["supplement_open_queued"] = true;
+        return true;
+    }
+    if (dialogs != 1 || otherModals || QApplication::activePopupWidget()) {
+        error = "supplement_dialog_not_unique"; return false;
+    }
+
+    auto code = oneVisible<QLineEdit>(dialog, "m_pEdtCode");
+    auto name = oneVisible<QLineEdit>(dialog, "m_pEdtDescription");
+    auto unit = oneVisible<QComboBox>(dialog, "m_pCbUnit");
+    auto quantity = oneVisible<QLineEdit>(dialog, "m_pEdtMmQuantity");
+    auto confirm = oneVisible<QAbstractButton>(dialog, "m_pBtnOk");
+    auto cancel = oneVisible<QAbstractButton>(dialog, "m_pBtnCancel");
+    if (!code || !code->isEnabled() || code->isReadOnly() || !code->text().startsWith("补子目")
+            || !name || !name->isEnabled() || name->isReadOnly() || !name->text().isEmpty()
+            || !quantity || !quantity->isEnabled() || quantity->isReadOnly() || !quantity->text().isEmpty()
+            || !unit || !unit->isEnabled() || !unit->isEditable() || !unit->currentText().isEmpty()
+            || !confirm || confirm->text() != "确定"
+            || (op == "supplement.check" && (!cancel || !cancel->isEnabled() || cancel->text() != "取消"))) {
+        error = "supplement_default_fields_changed";
+        return false;
+    }
+    const QStringList zeroFields{"m_pEdtRate", "1", "2", "3", "4", "5"};
+    for (const auto &field : zeroFields) {
+        const auto line = oneVisible<QLineEdit>(dialog, field);
+        if (!line || line->text() != "0") { error = "supplement_price_not_zero"; return false; }
+    }
+    static bool dispatched = false;
+    if (dispatched) { error = "supplement_already_dispatched"; return false; }
+    code->setText(kCode);
+    name->setText(kName);
+    unit->setEditText(kUnit);
+    quantity->setText(kQuantity);
+    if (code->text() != kCode || name->text() != kName || unit->currentText() != kUnit
+            || quantity->text() != kQuantity || !confirm->isEnabled()) {
+        if (op == "supplement.check") cancel->click();
+        error = "supplement_fields_not_accepted";
+        return false;
+    }
+    if (op == "supplement.check") {
+        cancel->click();
+        out["supplement_fields_checked"] = true;
+        return true;
+    }
+    dispatched = true;
+    out["business_dispatches"] = 1;
+    confirm->click();
+    return true;
+}
