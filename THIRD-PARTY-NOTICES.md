@@ -4,4 +4,4 @@
 
 Python、setuptools、jsonschema、MSVC、Windows SDK 和 Qt 是运行或构建依赖，各自保留原许可。GCCP7 与 GLD 二进制由使用者自行安装。
 
-公开版从本机广联达安装读取北京 2025 定额索引。
+随包索引包含北京 2025 概算子目编码、名称、专业、分类 ID 和现场查找用 ID。北京市住建委发布原文见 https://zjw.beijing.gov.cn/bjjs/xxgk/zcwj2024/qtzcwj/xxyx13/743876492/index.shtml 。

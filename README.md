@@ -5,12 +5,12 @@
 **GCCP7 Native CLI** provides native quota lookup, insertion with initial quantity, supplemental items, deletion and audited readback for Glodon GCCP7.
 
 - **Agent 入口**：[命令地图](docs/agent-commands.md) · [主技能](.agents/skills/gccp7-native-cli/SKILL.md) · [llms.txt](llms.txt)
-- **当前版本** `0.2.0b3`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
+- **当前版本** `0.2.0b4`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
 
 | 入口 | 当前范围 |
 | --- | --- |
 | `gccp doctor` / `gccp bind` | 检查工具链和六个组件指纹，绑定已经打开的测试工程，构建同进程只读观察器 |
-| `gccp catalog search` | 只读检索本机安装的北京 2025 原厂索引，支持编号、名称、专业和原厂 ID |
+| `gccp catalog search` | 只读检索随安装包提供的北京 2025 子目索引，支持编号、名称、专业和原厂 ID |
 | `gccp quota-candidates` | 从当前北京 2025 库按编号或原厂 ID 读取软件候选 |
 | `gccp quota-run` | 精确套入、填写新增子目工程量并读回。二级分部按路径执行，自动在读回后结束 |
 | `gccp quota-clone` | 复用已套的普通定额，复制一次并逐条向下追加，改零价主材名称、填量并读回 |
@@ -23,7 +23,7 @@
 
 ## 安装和绑定
 
-实机操作需要 Windows x64、Python 3.12、已安装且与配置指纹一致的 GCCP7、MSVC x64 工具链、Windows SDK、Qt 5.9.9 x64 MSVC SDK。安装包声明支持 Python 3.12 及以上，本次独立安装验证使用 3.12。北京 2025 原厂子目索引由本机广联达安装提供。用 PowerShell 建立独立环境，从源码安装时运行 `pip install .`。拿到 wheel 时，将该行的 `.` 换成 wheel 的实际路径。
+实机操作需要 Windows x64、Python 3.12、已安装且与配置指纹一致的 GCCP7、MSVC x64 工具链、Windows SDK、Qt 5.9.9 x64 MSVC SDK。安装包声明支持 Python 3.12 及以上，本次独立安装验证使用 3.12。北京 2025 原厂子目索引随 GitHub 源码和安装包一起提供，安装后默认离线查项。用 PowerShell 建立独立环境，从源码安装时运行 `pip install .`。拿到 wheel 时，将该行的 `.` 换成 wheel 的实际路径。
 
 ```powershell
 python -m venv .venv

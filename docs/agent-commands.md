@@ -8,7 +8,7 @@
 | 绑定项目 | `gccp bind` | 已打开测试副本、明确路径和 SHA256 | 加载只读观察器，写本地绑定和回执 |
 | 查预算和工料机 | `gccp native-inspect` | 绑定返回的 inspector | 只读 |
 | 查软件实际候选 | `gccp quota-candidates` | 已绑定工程、当前北京 2025 库、准确编号或 `--vendor-id` | 打开并关闭查询面板，无业务写入 |
-| 查定额索引 | `gccp catalog search` | 本机安装的北京 2025 原厂索引 | 只读，可用 `catalog inspect` 核对来源与条数 |
+| 查定额索引 | `gccp catalog search` | 随安装包提供的北京 2025 子目索引 | 只读，可用 `catalog inspect` 核对来源与条数 |
 | 重新导出原厂子目索引 | `gccp catalog vendor-index --library-root ... --output ...` | 本机安装的北京 2025 概算库目录 | 只读安装库，另建 JSON |
 | 预检套项 | `gccp runtime-prepare` | 复用 `quota-run` 的工程、父项、候选、数量和命令号参数 | 生成原生运行包和请求，可查看 `anchor_check`，零定额业务派发 |
 | 套入并填量 | `gccp quota-run` | 原厂 `--vendor-id` 或精确候选、父项 ID 或分部路径、数量和 command_id | 核对现场、插入、填量、读回。分部路径自动免主动保存，顶层常规套项请加 `--no-save` |
