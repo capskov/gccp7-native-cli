@@ -686,7 +686,13 @@ def main(argv=None):
     material.add_argument('--field', required=True, choices=('name', 'content'))
     material.add_argument('--quota-name', help='Also match the full parent quota name')
     material.add_argument('--quota-unit', help='Also match the parent quota unit')
+    material.add_argument('--resource-content', action='store_true',
+                          help='Edit the selected quota resource table, using its resource row path')
+    material.add_argument('--select-quota', help='Select this verified parent quota path before a resource edit')
     material.add_argument('--check-only', action='store_true')
+    resource_reconcile = sub.add_parser('resource-edit-reconcile', help='Verify an original resource edit without replay')
+    resource_reconcile.add_argument('--state', required=True, type=Path)
+    resource_reconcile.add_argument('--command-id', required=True)
     quantity = sub.add_parser('quota-quantity', help='Update one existing quota quantity and read it back')
     for flag in ('state', 'runtime-root'):
         quantity.add_argument('--' + flag, required=True, type=Path)
@@ -720,8 +726,9 @@ def main(argv=None):
                                help='Exact parent path, repeat per level. The target row must already be current')
     deletion.add_argument('--expected-quantity', help='Exact displayed quantity required for section-path deletion')
     deletion.add_argument('--expected-note', help='Also require this exact remark in section-path deletion')
-    deletion.add_argument('--kind', choices=('定', '换', '补'),
+    deletion.add_argument('--kind', choices=('定', '换', '补', '主'),
                           help='Budget row category for section-path deletion (default: 定)')
+    deletion.add_argument('--parent-quota', help='Full parent quota name for temporary main material deletion')
     deletion.add_argument('--navigate-target', action='store_true',
                           help='Select the uniquely matched budget row using native navigation')
     deletion.add_argument('--mode', required=True, choices=('temporary', 'permanent'))
@@ -752,6 +759,7 @@ def main(argv=None):
         if args.command == 'doctor':
             from .native_bootstrap import doctor
             data = doctor()
+            data.update(cli_version=__version__, cli_module=__file__)
         elif args.command == 'bind':
             from .native_bootstrap import bind_open
             data = bind_open(args.state, args.runtime_root, args.workcopy, args.expected_sha256,
@@ -845,6 +853,9 @@ def main(argv=None):
             if args.navigate_anchor:
                 request['navigate_anchor'] = True
             data = supplement_quota(args.state, args.runtime_root, args.inspector, request, check_only=args.check_only)
+        elif args.command == 'resource-edit-reconcile':
+            from .native_material_edit import reconcile_resource_edit
+            data = reconcile_resource_edit(args.state, args.command_id)
         elif args.command == 'material-edit':
             from .native_material_edit import edit_material
             request = {key: getattr(args, key) for key in (
@@ -854,6 +865,14 @@ def main(argv=None):
             for key in ('quota_name', 'quota_unit'):
                 if getattr(args, key) is not None:
                     request[key] = getattr(args, key)
+            if args.resource_content:
+                if args.field != 'content':
+                    raise Rejected('RESOURCE_FIELD_INVALID', 'Resource editing requires --field content')
+                request['field'] = 'resource-content'
+                if args.select_quota is not None:
+                    request['select_quota'] = args.select_quota
+            elif args.select_quota is not None:
+                raise Rejected('RESOURCE_FIELD_INVALID', '--select-quota requires --resource-content')
             data = edit_material(args.state, args.runtime_root, request, check_only=args.check_only)
         elif args.command == 'quota-quantity':
             from .native_material_edit import edit_material
@@ -882,10 +901,12 @@ def main(argv=None):
                     request['expected_note'] = args.expected_note
                 if args.kind is not None:
                     request['kind'] = args.kind
+                if args.parent_quota is not None:
+                    request['parent_quota'] = args.parent_quota
                 if args.navigate_target:
                     request['navigate_target'] = True
             elif (args.expected_quantity is not None or args.expected_note is not None
-                  or args.kind is not None or args.navigate_target):
+                  or args.kind is not None or args.parent_quota is not None or args.navigate_target):
                 raise Rejected('DELETE_SCOPE_INVALID', 'Target filters and navigation require a section path')
             data = delete_quota(args.state, args.runtime_root, request)
         elif args.command == 'section-delete':

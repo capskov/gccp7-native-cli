@@ -110,11 +110,31 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         error = "parent_not_unique";
         return false;
     }
+    if (!kParentQuota.isEmpty()) {
+        QModelIndex owner;
+        int matches = 0;
+        for (int r = 0; r < model->rowCount(parent); ++r) {
+            const auto row = model->index(r, 0, parent);
+            const auto values = quotaValues(model, row);
+            if ((values[1] == "定" || values[1] == "换") && values[2] == kParentQuota) {
+                owner = row;
+                ++matches;
+            }
+        }
+        if (matches != 1 || model->rowCount(owner) > 500) { error = "quota_owner_not_unique"; return false; }
+        parent = owner;
+    }
+    const auto readbackTarget = req["expected_target"].toArray();
+    const bool temporaryReadback = op == "inspect" && kAction == "PreDelete" && readbackTarget.size() == 1;
     for (int r = 0; kKind != "部" && r < model->rowCount(parent); ++r) {
         auto row = model->index(r, 0, parent);
         auto values = quotaValues(model, row);
+        const bool temporarilyDeleted = temporaryReadback && values[4].toString().isEmpty() &&
+            values[6] == "0" && values[8] == "0" && row.data(Qt::FontRole).value<QFont>().strikeOut();
+        if (temporaryReadback &&
+            currentIndexEvidence(model, row)["row_path_session_only"] != readbackTarget[0]) continue;
         if (values[1] == kKind && values[0] == kCode && values[2] == kName && values[3] == kUnit &&
-            (kSections.isEmpty() || values[6] == kQuantity) && (!kMatchNote || values[12] == kNote)) {
+            (kSections.isEmpty() || values[6] == kQuantity || temporarilyDeleted) && (!kMatchNote || values[12] == kNote)) {
             target = row; ++targets;
         }
     }
@@ -146,7 +166,7 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
             catalog.append(QJsonObject{{"name", name}, {"text", label},
                 {"enabled", candidate->isEnabled()}, {"shortcut", candidate->shortcut().toString()}});
         }
-        if (name == kAction && label == kActionText && candidate->isEnabled() && candidate->isVisible()) {
+        if (name == kAction && label == kActionText && (candidate->isEnabled() || kNavigateTarget) && candidate->isVisible()) {
             action = candidate; ++actions;
         }
     }

@@ -205,6 +205,7 @@ class SessionManager:
             result = loads(latest['result'])
             readback_kind = {
                 'native_delete_readback_verified_not_saved': 'native_quota_delete_readback',
+                'native_delete_no_effect_verified': 'native_quota_delete_readback',
                 'native_supplement_readback_verified_not_saved': 'native_supplement_readback',
                 'native_standard_factor_readback_verified_not_saved': 'native_standard_factor_readback',
                 'native_material_spec_readback_verified_not_saved': 'native_material_spec_readback',

@@ -33,7 +33,7 @@ def capture(*, temporary=False, removed=False, modal=False):
 
 
 class DeleteLifecycleTests(unittest.TestCase):
-    def run_delete(self, mode, *observations):
+    def run_delete(self, mode, *observations, expected_status='native_delete_readback_verified_not_saved'):
         with TemporaryDirectory() as temp:
             root = Path(temp)
             session = dict(project_id='project.test', session_id='session.test', pid=1,
@@ -51,9 +51,11 @@ class DeleteLifecycleTests(unittest.TestCase):
                 manager.return_value.validate_session.return_value = metadata
                 receipt = delete_quota(root, root, request)
                 retry = delete_quota(root, root, request)
-            self.assertEqual(receipt['status'], 'native_delete_readback_verified_not_saved')
+            self.assertEqual(receipt['status'], expected_status)
             self.assertEqual(retry['new_business_dispatches'], 0)
             self.assertTrue(retry['receipt_only'])
+            if mode == 'temporary':
+                self.assertEqual(bridge.call.call_args_list[2].kwargs['expected_target'], ['/0/0/0'])
             return [call.args[0] for call in bridge.call.call_args_list]
 
     def test_temporary_arms_once_and_uses_one_action(self):
@@ -70,3 +72,9 @@ class DeleteLifecycleTests(unittest.TestCase):
         pending['modals'][0]['labels'][-1] = '是否删除全部？'
         with self.assertRaisesRegex(ValueError, 'Unrecognized deletion confirmation'):
             require_confirmation(capture(), pending)
+
+    def test_temporary_no_effect_is_verified_and_does_not_replay(self):
+        calls = self.run_delete(
+            'temporary', capture(), {'native_delete_queued': True}, capture(),
+            expected_status='native_delete_no_effect_verified')
+        self.assertEqual(calls, ['inspect', 'quota.delete', 'inspect'])

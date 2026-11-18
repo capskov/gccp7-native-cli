@@ -35,6 +35,7 @@ def build_bridge(directory, profile, session, title, request, *, confirm_only=Fa
         'kUnit': request['unit'], 'kAction': action, 'kActionText': label,
         'kQuantity': request.get('expected_quantity') or '',
         'kKind': request.get('kind', '定'), 'kNote': request.get('expected_note', ''),
+        'kParentQuota': request.get('parent_quota', ''),
     }
     header = ''.join(f'static const QString {name} = QStringLiteral({json.dumps(value, ensure_ascii=False)});\n'
                      for name, value in constants.items())
@@ -130,6 +131,11 @@ def delete_quota(state, runtime_root, request):
     mode = request['mode']
     if mode not in ACTIONS:
         raise Rejected('DELETE_MODE_INVALID', 'Choose temporary or permanent explicitly')
+    parent_quota = request.get('parent_quota')
+    if ((request.get('kind') == '主') != bool(parent_quota)
+            or (parent_quota and (mode != 'temporary' or not sections or len(parent_quota) > 256
+                                  or any(ord(char) < 32 for char in parent_quota)))):
+        raise Rejected('DELETE_SCOPE_INVALID', 'Main material temporary deletion requires its exact parent quota')
     store = Ledger(state)
     try:
         initialize_commands(store)
@@ -160,14 +166,18 @@ def delete_quota(state, runtime_root, request):
             scope = hashlib.sha256(command_id.encode()).hexdigest()[:20]
             directory = Path(runtime_root).resolve()/'delete'/scope/uuid.uuid4().hex[:12]
             bridge = build_bridge(directory, profile, meta['session'], project_window_prefix(meta['workcopy_path']), request)
-            before = bridge.call('inspect', timeout=30)
+            try:
+                before = bridge.call('inspect', timeout=30)
+            except TimeoutError as exc:
+                raise Rejected('DELETE_PREFLIGHT_TIMEOUT_NO_DISPATCH',
+                               'Read-only preflight timed out before any delete intent. Check the application and binding before retrying.') from exc
             budget = table(before, '工程量表达式')
             if before['modals']:
                 raise Rejected('DELETE_WINDOW_BLOCKED', 'A modal dialog is visible. Inspect it before deleting.')
             if before['target_matches'] != 1:
                 raise Rejected('DELETE_TARGET_NOT_UNIQUE', 'The exact quota must exist once under the requested budget parent')
             action, label = ACTIONS[mode]
-            if sum(item['name'] == action and item['text'] == label and item['enabled']
+            if sum(item['name'] == action and item['text'] == label and (item['enabled'] or request.get('navigate_target'))
                    for item in before['delete_actions']) != 1:
                 raise Rejected('DELETE_ACTION_UNAVAILABLE', 'The reviewed budget action is not available')
             target = before['target']
@@ -196,8 +206,10 @@ def delete_quota(state, runtime_root, request):
                 dispatch = bridge.call('quota.delete', intent, timeout=30, expected_target=target['values'])
                 if not dispatch.get('native_delete_queued'):
                     raise ValueError('Native deletion did not return a dispatch acknowledgement')
-                after = bridge.call('inspect', timeout=30)
                 result.update(business_dispatches=1, ipc_records=bridge.records)
+                after = bridge.call('inspect', timeout=30,
+                                    expected_target=[target['path']] if mode == 'temporary' else None)
+                result.update(ipc_records=bridge.records)
                 if after['modals']:
                     pending = store.put_evidence(project_id, ctx.session_id, 'native_quota_delete_readback',
                         dict(dispatch=dispatch, capture=after, preflight_evidence_id=pre))
@@ -235,6 +247,13 @@ def finish_delete(store, ctx, result, before, after, dispatch):
     result.update(evidence_id=proof, modals=after['modals'], target_after=after.get('target'))
     if after['modals']:
         raise ValueError('An unresolved dialog remains after deletion')
+    if (result['mode'] == 'temporary' and after.get('target_matches') == 1
+            and after.get('target') == before['target']
+            and table(after, '工程量表达式')['rows'] == table(before, '工程量表达式')['rows']):
+        result.pop('error', None)
+        result.update(status='native_delete_no_effect_verified')
+        save_result(store, result, 'readback_verified')
+        return result
     totals = verified_delta(before, after, result['mode'])
     result.pop('error', None)
     result.update(status='native_delete_readback_verified_not_saved', totals=totals)
@@ -350,7 +369,7 @@ def pending_delete_evidence(store, row, ctx, result):
 
 
 def reconcile_pending_delete(state, command_id):
-    """Verify a pending permanent deletion through its existing bridge, with no write dispatch."""
+    """Verify an original deletion with no new business dispatch."""
     store = Ledger(state)
     try:
         initialize_commands(store)
@@ -358,8 +377,8 @@ def reconcile_pending_delete(state, command_id):
         if not row:
             raise Rejected('COMMAND_NOT_FOUND', 'An original deletion command is required')
         result = json.loads(row['result'] or '{}')
-        if result.get('mode') != 'permanent':
-            raise Rejected('RECONCILIATION_NOT_AVAILABLE', 'Only a recorded permanent-delete confirmation is supported')
+        if result.get('mode') not in ACTIONS:
+            raise Rejected('RECONCILIATION_NOT_AVAILABLE', 'A recorded deletion is required')
         if row['phase'] == 'readback_verified':
             return {**result, 'idempotent_reentry': True, 'receipt_only': True, 'new_business_dispatches': 0}
         if not result.get('evidence_id') or result.get('business_dispatches') != 1:
@@ -373,10 +392,16 @@ def reconcile_pending_delete(state, command_id):
             ctx = SessionContext(**meta['session'])
             profile = profile_path(ctx.profile_id)
             manager = SessionManager(store, WindowsDesktop(), RuntimeProfile.load(profile))
-            _, before, recorded, dispatch, _ = pending_delete_evidence(store, row, ctx, result)
-            require_confirmation(before, recorded)
-            bridge = load_bridge(result['runtime'])
-            after = bridge.call('inspect', timeout=30)
+            request, before, recorded, dispatch, _ = pending_delete_evidence(store, row, ctx, result)
+            if result['mode'] == 'permanent':
+                require_confirmation(before, recorded)
+                bridge = load_bridge(result['runtime'])
+            else:
+                directory = Path(result['runtime']).parents[2] / ('drec-' + uuid.uuid4().hex[:12])
+                bridge = build_bridge(directory, profile, meta['session'],
+                                      project_window_prefix(meta['workcopy_path']), request, confirm_only=True)
+            after = bridge.call('inspect', timeout=30,
+                                expected_target=[before['target']['path']] if result['mode'] == 'temporary' else None)
             if after['modals']:
                 raise Rejected('CONFIRMATION_STILL_OPEN', 'Original deletion still awaits confirmation')
             if (after['pid'] != ctx.pid or after['created_filetime'] != ctx.created_filetime or

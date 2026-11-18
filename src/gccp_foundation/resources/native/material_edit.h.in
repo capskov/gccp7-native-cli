@@ -1,7 +1,9 @@
+#include <QMetaMethod>
+#include <QTabBar>
 static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
     const auto op = req["operation"].toString();
     if (op == "inspect") return true;
-    if (op != "material.check" && op != "material.edit") { error = "operation_not_allowed"; return false; }
+    if (op != "material.check" && op != "material.edit" && op != "material.focus") { error = "operation_not_allowed"; return false; }
     if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
         error = "dialog_or_popup_active"; return false;
     }
@@ -9,18 +11,35 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
     auto getter = reinterpret_cast<QAbstractItemModel* (__fastcall *)(const void*)>(
         GetProcAddress(module, "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
     QAbstractItemModel *model = nullptr;
+    QAbstractItemModel *resources = nullptr;
+    const void *budgetView = nullptr;
+    QWidget *budgetWidget = nullptr;
     int count = 0;
+    int resourceCount = 0;
     if (getter) for (auto widget : QApplication::allWidgets()) {
         if (!widget->isVisible() || !widget->inherits("GTPGSPTableView")) continue;
         auto view = widget->qt_metacast("GlodonAbstractItemView");
         auto candidate = view ? getter(view) : nullptr;
-        if (candidate && candidate->thread() == qApp->thread() && candidate->columnCount() == 13
-                && candidate->headerData(4, Qt::Horizontal).toString() == "工程量表达式") {
-            model = candidate; ++count;
+        if (!candidate || candidate->thread() != qApp->thread() || candidate->columnCount() != 13) continue;
+        if (candidate->headerData(4, Qt::Horizontal).toString() == "工程量表达式") {
+            model = candidate; budgetView = view; budgetWidget = widget; ++count;
+        }
+        if (candidate->headerData(6, Qt::Horizontal).toString() == "含量" &&
+                candidate->headerData(12, Qt::Horizontal).toString() == "原始含量") {
+            resources = candidate; ++resourceCount;
         }
     }
     if (count != 1) { error = "budget_not_unique"; return false; }
     const auto target = req["expected_target"].toObject();
+    const int col = target["column"].toInt(-1);
+    if (col == 6) {
+        auto getter = GetProcAddress(module, "?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
+        if (resourceCount != 1 || !getter) { error = "resource_model_not_unique"; return false; }
+        auto owner = currentIndexEvidence(model, readPinnedCurrentIndex(budgetView, reinterpret_cast<const void*>(getter)));
+        if (!owner["verified"].toBool() || owner["row_path_session_only"] != target["quota_path"] ||
+                owner["values"] != target["quota"]) { error = "resource_owner_changed"; return false; }
+        model = resources;
+    }
     QModelIndex row;
     for (const auto &part : target["path"].toString().split('/', QString::SkipEmptyParts)) {
         bool ok = false;
@@ -28,12 +47,34 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         if (!ok || index < 0 || index >= model->rowCount(row)) { error = "invalid_row_path"; return false; }
         row = model->index(index, 0, row);
     }
-    if (!row.isValid() || !row.parent().isValid()) { error = "invalid_material_row"; return false; }
-    const int col = target["column"].toInt(-1);
-    if (col != 2 && col != 4 && col != 5) { error = "invalid_edit_column"; return false; }
+    if (op == "material.focus") {
+        const auto meta = budgetWidget->metaObject();
+        const int nav = meta->indexOfMethod("setCurrentIndex(QModelIndex)");
+        if (!row.isValid() || currentIndexEvidence(model, row)["values"] != target["quota"] ||
+                nav < 0 || QString(meta->method(nav).enclosingMetaObject()->className()) != "GSPTableView" ||
+                !meta->method(nav).invoke(budgetWidget, Qt::DirectConnection, Q_ARG(QModelIndex, row))) {
+            error = "resource_owner_navigation_failed"; return false;
+        }
+        out["application_selection_changed"] = true;
+        QTabBar *resourceTabs = nullptr;
+        int tabMatches = 0;
+        for (auto bar : budgetWidget->window()->findChildren<QTabBar*>()) {
+            if (bar->isVisible() && bar->count() > 1 && bar->tabText(0) == "工料机显示" &&
+                    bar->tabText(1) == "单价构成") {
+                resourceTabs = bar;
+                ++tabMatches;
+            }
+        }
+        if (tabMatches != 1) { error = "resource_tab_not_unique"; return false; }
+        if (resourceTabs->currentIndex() == 0) resourceTabs->setCurrentIndex(1);
+        resourceTabs->setCurrentIndex(0);
+        return true;
+    }
+    if (!row.isValid() || (col != 6 && !row.parent().isValid())) { error = "invalid_material_row"; return false; }
+    if (col != 2 && col != 4 && col != 5 && col != 6) { error = "invalid_edit_column"; return false; }
     if (currentIndexEvidence(model, row)["values"] != target["material"]
-            || currentIndexEvidence(model, row.parent())["values"] != target["quota"]
-            || row.sibling(row.row(), 1).data().toString() != (col == 4 ? "定" : "主")) {
+            || (col != 6 && (currentIndexEvidence(model, row.parent())["values"] != target["quota"]
+            || row.sibling(row.row(), 1).data().toString() != (col == 4 ? "定" : "主")))) {
         error = "edit_identity_changed"; return false;
     }
     auto cell = row.sibling(row.row(), col);

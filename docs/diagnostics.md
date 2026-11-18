@@ -2,7 +2,7 @@
 
 运行 `gccp doctor` 核对工具链、系统与目标软件指纹。它不加载原生桥。绑定后可运行 `gccp native-inspect --runtime <inspector/runtime.json>` 读取模型。一个观察器只对应一个进程和工程，达到读取次数上限时用同一账本重新绑定。操作前检查真实工程和对话框。
 
-超时或进程退出后，先执行 `gccp command-status --state <原目录> --command-id <原命令号>`，用只读预算核对后交操作者判断。若已有完整保存证据，套项可用 `command-reconcile` 核对原运行清单与原请求。永久删除确认之后可用 `quota-delete-reconcile` 做只读验证。结果未决时不得换命令号重发。
+超时或进程退出后，先执行 `gccp command-status --state <原目录> --command-id <原命令号>`，用只读预算核对后交操作者判断。若已有完整保存证据，套项可用 `command-reconcile` 核对原运行清单与原请求。已记录派发回执的临时删除或永久删除确认之后可用 `quota-delete-reconcile` 做只读验证。结果未决时不得换命令号重发。
 
 若跨分部导航返回 `anchor_navigation_step_mismatch`，准备阶段只派发了网格导航。用原命令的 `runtime.json` 和 `request.json` 执行 `command-reconcile`。CLI 核对原生准备回执、两条业务动作状态、进程身份及完整预算模型。证据相符时，返回 `native_navigation_blocked_no_dispatch` 并释放工程占用，原命令仍保留。运行目录 `build` 的 `prepare-*.stage` 文件可以区分展开、网格移动及回读前后的边界。
 
@@ -25,3 +25,6 @@
 常规套项在读回后结束，保存由操作者或广联达安排。若广联达正在保存，等操作者确认后再核对工程文件身份。
 
 原生保存只排队一次。执行器默认最多等待五分钟，可用 `--save-timeout` 按工程调整，每四秒检查一次磁盘文件。文件内容有变化、连续两次摘要相同且 CRC 校验通过后，才向广联达发出预算及工料机读回，再复核一次摘要。等待磁盘期间没有新的广联达请求。任一步无法确认时，保留原保存记录和命令号供核对。传 `--no-save` 时直接在读回后结束。
+
+`DELETE_PREFLIGHT_TIMEOUT_NO_DISPATCH` 表示尚未登记删除意图，亦未派发。先等软件恢复响应，再核对当前工程文件身份及预算。
+`native_delete_no_effect_verified` 表示该次临时删除后目标及整表均未变化。按新操作处理时先重新定位，已登记的原命令号只返回原回执。

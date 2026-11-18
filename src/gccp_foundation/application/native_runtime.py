@@ -523,7 +523,7 @@ def prepare_entry(catalog_path, state, inspector_path, project_id, parent_id, qu
         children.sort(key=lambda r:int(r['row_path_session_only'].rsplit('/',1)[1]))
         if not 1 <= len(children) <= 99:
             raise Rejected('PARENT_SHAPE_NOT_REVIEWED', 'Non-empty bounded parent required by this internal worker')
-        if parent_sections is not None and children[-1]['values'][1] != '定':
+        if parent_sections is not None and children[-1]['values'][1] not in ('定', '换', '补'):
             raise Rejected('PARENT_SHAPE_NOT_REVIEWED', 'Section path requires a quota row as its last direct child')
         anchor = children[-1]
         anchor_check = None

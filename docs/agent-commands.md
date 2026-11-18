@@ -54,5 +54,7 @@
 material-edit 接收 --state、--runtime-root、--project-id、--command-id、--path、--quota-code、
 --quota-quantity、--quota-note、--material-code、--field name|content、--expected 和 --value。
 可用 --quota-name、--quota-unit 同时核对父定额全名与单位。成功回执包含目标预算行路径。
+选中父定额并显示工料机后，带 `--resource-content --field content` 可改工料机表的单单位含量。用该表的行路径、资源编码和原含量，CLI 核对数量由广联达重新计算。若单次写入已接受但回执待核，用 `resource-edit-reconcile` 根据原命令只读核对。
+临时删除预算树中的主材可以传入 `quota-delete --kind 主 --parent-quota <完整父定额名称> --mode temporary`，用读回的删除线、工程量和合价确认结果。
 可加 --check-only 检查目标和可编辑性。一次修改一格，随后读回。改名后先读回主材编码再继续，
 因为广联达可能为独立主材分配新编码。命令不会保存工程。
