@@ -60,11 +60,21 @@ def supplement_quota(state, runtime_root, inspector, request, *, check_only=Fals
             parent = find_section_path(budget['rows'], request['parent_sections'])['row_path_session_only']
             current = budget['current']
             anchor = current.get('row_path_session_only', '')
+            navigate = False
             if (snapshot['pid'] != ctx.pid or snapshot['created_filetime'] != ctx.created_filetime
-                    or not snapshot['callback_on_app_thread'] or not current.get('verified')
-                    or anchor.rsplit('/', 1)[0] != parent or current['values'][1] not in ('定', '换', '补')
+                    or not snapshot['callback_on_app_thread']):
+                raise Rejected('SUPPLEMENT_SESSION_CHANGED', 'The original application session is required')
+            if (not current.get('verified') or anchor.rsplit('/', 1)[0] != parent
+                    or current['values'][1] not in ('定', '换', '补')
                     or not current['values'][0]):
-                raise Rejected('SUPPLEMENT_SECTION_NOT_SELECTED', 'Select a direct quota in the requested section')
+                anchors = [row for row in budget['rows']
+                           if row['row_path_session_only'].rsplit('/', 1)[0] == parent
+                           and row['values'][1] in ('定', '换', '补') and row['values'][0]]
+                if not request.get('navigate_anchor') or not anchors:
+                    raise Rejected('SUPPLEMENT_SECTION_NOT_SELECTED', 'Select a direct quota in the requested section')
+                current = anchors[-1]
+                anchor = current['row_path_session_only']
+                navigate = True
             if any(r['values'][0] == request['code'] or r['values'][2] == request['name'] for r in budget['rows']):
                 raise Rejected('SUPPLEMENT_EXISTS', 'This supplemental code or name is already present')
             directory = Path(runtime_root).resolve()/'supplement'/uuid.uuid4().hex
@@ -82,6 +92,9 @@ def supplement_quota(state, runtime_root, inspector, request, *, check_only=Fals
                 (directory/name).write_text(source, encoding='utf-8', newline='\n')
             compile_bridge(directory)
             bridge = load_bridge(directory)
+            if navigate:
+                bridge.call('supplement.select', timeout=25, expected_target=current['values'])
+                budget = {**budget, 'current': current}
             before, opened = prepare_form(bridge, budget, check_only)
             if check_only:
                 checked = bridge.call('supplement.check', timeout=25, expected_target=current['values'])

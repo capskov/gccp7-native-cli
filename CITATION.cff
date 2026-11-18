@@ -4,6 +4,6 @@ title: "GCCP7 Native CLI"
 type: software
 authors:
   - name: capskov
-version: 0.2.0b4
+version: 0.2.0b5
 license: GPL-2.0-or-later
 repository-code: "https://github.com/capskov/gccp7-native-cli"

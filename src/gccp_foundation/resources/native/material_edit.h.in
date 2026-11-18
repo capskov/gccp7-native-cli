@@ -29,13 +29,13 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         row = model->index(index, 0, row);
     }
     if (!row.isValid() || !row.parent().isValid()) { error = "invalid_material_row"; return false; }
+    const int col = target["column"].toInt(-1);
+    if (col != 2 && col != 4 && col != 5) { error = "invalid_edit_column"; return false; }
     if (currentIndexEvidence(model, row)["values"] != target["material"]
             || currentIndexEvidence(model, row.parent())["values"] != target["quota"]
-            || row.sibling(row.row(), 1).data().toString() != "主") {
-        error = "material_identity_changed"; return false;
+            || row.sibling(row.row(), 1).data().toString() != (col == 4 ? "定" : "主")) {
+        error = "edit_identity_changed"; return false;
     }
-    const int col = target["column"].toInt(-1);
-    if (col != 2 && col != 5) { error = "invalid_material_column"; return false; }
     auto cell = row.sibling(row.row(), col);
     out["editable"] = bool(cell.flags() & Qt::ItemIsEditable);
     if (!out["editable"].toBool()) { error = "material_field_not_editable"; return false; }
@@ -49,3 +49,4 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
     if (!accepted) { error = "material_setter_rejected"; return false; }
     return true;
 }
+

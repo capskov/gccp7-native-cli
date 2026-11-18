@@ -12,7 +12,7 @@
 - [Diagnostics](docs/diagnostics.md): Read-only recovery and original command receipts.
 - [Architecture](docs/architecture.md): Native execution, safety boundaries and verified cases.
 
-## 0.2.0b4 操作入口
+## 0.2.0b5 操作入口
 
 1. 用 `doctor` 核实本机工具链，用 `bind` 绑定已打开且路径明确的 GPB7。记录工程 ID、账本和 inspector，用 `native-inspect` 核对项目与分部。
 2. 新套项先用 `catalog search` 查北京 2025 子目，再用 `quota-candidates` 确认现场唯一候选及单位。通过 `quota-run` 套入并填初始工程量。分部路径用实际名称逐级指定。

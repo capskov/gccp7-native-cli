@@ -33,10 +33,14 @@ def build_bridge(directory, profile, session, title, request, *, confirm_only=Fa
     constants = {
         'kParent': request['parent_id'] or '', 'kCode': request['code'], 'kName': request['name'],
         'kUnit': request['unit'], 'kAction': action, 'kActionText': label,
+        'kQuantity': request.get('expected_quantity') or '',
+        'kKind': request.get('kind', '定'), 'kNote': request.get('expected_note', ''),
     }
     header = ''.join(f'static const QString {name} = QStringLiteral({json.dumps(value, ensure_ascii=False)});\n'
                      for name, value in constants.items())
     header += f'static constexpr bool kConfirmOnly = {str(confirm_only).lower()};\n'
+    header += f'static constexpr bool kMatchNote = {str("expected_note" in request).lower()};\n'
+    header += f'static constexpr bool kNavigateTarget = {str(request.get("navigate_target") is True).lower()};\n'
     sections = ', '.join(json.dumps(name, ensure_ascii=False) for name in request.get('parent_sections', []))
     header += 'static const QStringList kSections{' + sections + '};\n'
     generated['operations.h'] = header + (templates/'delete.h.in').read_text(encoding='utf-8')
@@ -110,11 +114,16 @@ def delete_quota(state, runtime_root, request):
                        for value in sections)
                 or request.get('expected_quantity') is None):
             raise Rejected('DELETE_SCOPE_INVALID', 'Section path and exact displayed quantity required')
-        request['expected_quantity'] = normalize_quantity(request['expected_quantity'])
+        request['expected_quantity'] = normalize_quantity(request['expected_quantity'], allow_zero=True)
+        note = request.get('expected_note', '')
+        if len(note) > 2048 or any(ord(char) < 32 and char not in '\n\r\t' for char in note):
+            raise Rejected('TARGET_IDENTITY_INVALID', 'Expected remark exceeds the supported size or characters')
     elif not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', request['parent_id'] or ''):
         raise Rejected('IDENTIFIER_INVALID', 'Explicit bounded parent_id required')
     for name in ('code', 'name', 'unit'):
         value = request[name]
+        if request.get('kind') == '部' and name in ('code', 'unit') and not value:
+            continue
         if not value.strip() or len(value) > 256 or any(ord(ch) < 32 for ch in value):
             raise Rejected('TARGET_IDENTITY_INVALID', f'Exact nonempty {name} required')
     project_id, command_id = request['project_id'], request['command_id']
@@ -164,9 +173,11 @@ def delete_quota(state, runtime_root, request):
             target = before['target']
             if sections is not None:
                 current = budget['current']
-                if (current.get('verified') is not True or current.get('row_path_session_only') != target['path']
-                        or current.get('values') != target['values']
-                        or target['values'][6] != request['expected_quantity']):
+                if (target['values'][6] != request['expected_quantity']
+                        or (not request.get('navigate_target') and (
+                            current.get('verified') is not True
+                            or current.get('row_path_session_only') != target['path']
+                            or current.get('values') != target['values']))):
                     raise Rejected('DELETE_TARGET_NOT_CURRENT', 'Current exact quota and its expected quantity are required')
             if mode == 'temporary' and any(target['strikeout']):
                 raise Rejected('ALREADY_TEMPORARY_DELETED', 'Use a fresh readback to inspect the existing temporary deletion')
@@ -208,7 +219,7 @@ def save_result(store, result, phase='armed_unknown'):
             "UPDATE native_cli_commands SET phase=?,result=? WHERE command_id=? AND phase='armed_unknown'",
             (phase, encoded(result), result['command_id']))
         if changed.rowcount != 1:
-            raise Rejected('COMMAND_CHANGED', 'Deletion intent changed during execution')
+            raise Rejected('COMMAND_CHANGED', 'The recorded command intent changed during execution')
 
 
 def stop_delete(store, result, exc):

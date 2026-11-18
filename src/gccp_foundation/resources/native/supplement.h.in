@@ -1,6 +1,7 @@
 #include <QAbstractButton>
 #include <QComboBox>
 #include <QLineEdit>
+#include <QMetaMethod>
 #include <QTimer>
 
 template<class T> static T *oneVisible(QWidget *parent, const QString &name) {
@@ -24,7 +25,7 @@ static QWidget *supplementDialog(int &dialogs, int &otherModals) {
     return dialog;
 }
 
-static QWidget *boundBudget(const QJsonValue &expected) {
+static QWidget *boundBudget(const QJsonValue &expected, bool navigate = false) {
     auto module = GetModuleHandleW(L"GLDTableView.dll");
     auto modelGetter = reinterpret_cast<QAbstractItemModel* (__fastcall *)(const void*)>(
         GetProcAddress(module, "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
@@ -32,6 +33,8 @@ static QWidget *boundBudget(const QJsonValue &expected) {
     if (!modelGetter || !currentGetter) return nullptr;
     QJsonObject current;
     QWidget *budget = nullptr;
+    QAbstractItemModel *budgetModel = nullptr;
+    const void *budgetView = nullptr;
     int budgets = 0;
     for (auto widget : QApplication::allWidgets()) {
         if (!widget->isVisible() || !widget->inherits("GTPGSPTableView")) continue;
@@ -41,9 +44,28 @@ static QWidget *boundBudget(const QJsonValue &expected) {
                 || model->headerData(4, Qt::Horizontal).toString() != "工程量表达式") continue;
         ++budgets;
         budget = widget;
+        budgetModel = model;
+        budgetView = view;
         current = currentIndexEvidence(model, readPinnedCurrentIndex(view, reinterpret_cast<const void*>(currentGetter)));
     }
-    return budgets == 1 && current["verified"].toBool() && current["row_path_session_only"] == kAnchor
+    if (budgets != 1) return nullptr;
+    if (navigate) {
+        QModelIndex target;
+        for (const auto &part : kAnchor.split('/', QString::SkipEmptyParts)) {
+            bool ok = false;
+            const int row = part.toInt(&ok);
+            if (!ok || row < 0 || row >= budgetModel->rowCount(target)) return nullptr;
+            target = budgetModel->index(row, 0, target);
+        }
+        const auto meta = budget->metaObject();
+        const int nav = meta->indexOfMethod("setCurrentIndex(QModelIndex)");
+        if (!target.isValid() || currentIndexEvidence(budgetModel, target)["values"] != expected
+                || nav < 0 || QString(meta->method(nav).enclosingMetaObject()->className()) != "GSPTableView"
+                || !meta->method(nav).invoke(budget, Qt::DirectConnection, Q_ARG(QModelIndex, target))) return nullptr;
+        current = currentIndexEvidence(budgetModel,
+            readPinnedCurrentIndex(budgetView, reinterpret_cast<const void*>(currentGetter)));
+    }
+    return current["verified"].toBool() && current["row_path_session_only"] == kAnchor
         && current["values"] == expected ? budget : nullptr;
 }
 
@@ -68,6 +90,14 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
     out["supplement_dialogs"] = dialogs;
     out["other_modals"] = otherModals;
     if (op == "inspect") return true;
+    if (op == "supplement.select") {
+        if (dialogs || otherModals || QApplication::activePopupWidget() || !boundBudget(req["expected_target"], true)) {
+            error = "supplement_navigation_not_verified";
+            return false;
+        }
+        out["application_selection_changed"] = true;
+        return true;
+    }
     if (op != "supplement.open" && op != "supplement.check" && op != "supplement.commit") {
         error = "operation_not_allowed"; return false;
     }

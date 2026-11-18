@@ -10,7 +10,7 @@ import uuid
 from .native_build import TEMPLATES, compile_bridge, profile_path
 from .native_cli import Rejected, digest, encoded, initialize_commands
 from .native_delete import load_bridge, save_result
-from .native_runtime import _replace, normalize_quantity, render_transport
+from .native_runtime import _replace, displayed_quantity, normalize_quantity, render_transport
 from .native_worker_support import (
     Ledger, RuntimeProfile, SessionManager, WindowsDesktop, execution_lock, project_window_prefix, rows, table,
 )
@@ -20,12 +20,13 @@ from gccp_foundation.storage.native_save_attempts import NativeSaveAttempts
 
 def edit_material(state, runtime_root, request, *, check_only=False):
     command = request['command_id']
+    quota_edit = request['field'] == 'quantity'
     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', command):
         raise Rejected('IDENTIFIER_INVALID', 'Provide a bounded command ID')
     if not re.fullmatch(r'(?:/\d+){3,12}', request['path']):
         raise Rejected('MATERIAL_PATH_INVALID', 'Use the current native-inspect material row path')
-    if request['field'] == 'content':
-        request['value'] = normalize_quantity(request['value'])
+    if quota_edit or request['field'] == 'content':
+        request['value'] = normalize_quantity(request['value'], allow_zero=not quota_edit)
     elif not request['value'].strip() or len(request['value']) > 160:
         raise Rejected('MATERIAL_NAME_INVALID', 'Provide a nonempty name of at most 160 characters')
     signature = digest(request)
@@ -65,11 +66,24 @@ def edit_material(state, runtime_root, request, *, check_only=False):
             original = rows(table(before, '工程量表达式'))
             material = original.get(path, {}).get('values', [])
             quota = original.get(parent, {}).get('values', [])
-            column = 5 if request['field'] == 'content' else 2
-            if (len(material) != 13 or len(quota) != 13 or material[:2] != [request['material_code'], '主']
+            column = {'name': 2, 'quantity': 4, 'content': 5}[request['field']]
+            if quota_edit:
+                if (len(material) != 13 or material[:4] != [request['quota_code'], '定',
+                        request['quota_name'], request['quota_unit']]
+                        or material[4] != request['expected'] or material[12] != request['quota_note']):
+                    raise Rejected('QUOTA_TARGET_MISMATCH', 'The quota differs from the reviewed snapshot')
+                expected_quantity = Decimal(displayed_quantity(material[3], request['value']))
+            elif (len(material) != 13 or len(quota) != 13 or material[:2] != [request['material_code'], '主']
                     or quota[:2] != [request['quota_code'], '定'] or quota[6] != request['quota_quantity']
-                    or material[column] != request['expected'] or quota[12] != request['quota_note']):
+                    or quota[2] != request.get('quota_name', quota[2])
+                    or quota[3] != request.get('quota_unit', quota[3])
+                    or material[column] != request['expected']
+                    or quota[12] != request['quota_note']):
                 raise Rejected('MATERIAL_TARGET_MISMATCH', 'The quota or material differs from the reviewed snapshot')
+            elif column == 5:
+                expected_quantity = Decimal(quota[6]) * Decimal(request['value'])
+            else:
+                expected_quantity = Decimal(material[6])
             target = dict(path=path, material=material, quota=quota, column=column, value=request['value'])
             checked = bridge.call('material.check', expected_target=target, timeout=25)
             if not checked.get('editable'):
@@ -89,10 +103,14 @@ def edit_material(state, runtime_root, request, *, check_only=False):
                 after = bridge.call('inspect', timeout=25)
                 current = rows(table(after, '工程量表达式'))
                 actual = current[path]['values']
-                expected_quantity = (Decimal(quota[6]) * Decimal(request['value']) if column == 5 else Decimal(material[6]))
+                if quota_edit:
+                    identity_matches = (actual[:4] == material[:4] and actual[5] == material[5]
+                                        and actual[11:] == material[11:])
+                else:
+                    identity_matches = actual[1] == '主' and actual[3:5] == material[3:5]
                 if (action.get('business_dispatches') != 1 or action.get('setter_accepted') is not True
                         or actual[column] != request['value'] or Decimal(actual[6]) != expected_quantity
-                        or actual[1] != '主' or actual[3:5] != material[3:5] or actual[7] != material[7]
+                        or not identity_matches or actual[7] != material[7]
                         or current.keys() != original.keys()):
                     raise ValueError('Material edit readback differs from the requested result')
                 for key, previous in original.items():
@@ -103,12 +121,17 @@ def edit_material(state, runtime_root, request, *, check_only=False):
                     if path.startswith(key + '/'):
                         previous_values = previous_values[:7] + previous_values[10:]
                         actual_values = actual_values[:7] + actual_values[10:]
+                    if quota_edit and key.startswith(path + '/'):
+                        previous_values = previous_values[:6] + previous_values[7:8] + previous_values[9:]
+                        actual_values = actual_values[:6] + actual_values[7:8] + actual_values[9:]
                     if actual_values != previous_values:
                         raise ValueError('Material edit changed an unrelated budget field')
                 evidence = store.put_evidence(project_id, ctx.session_id, 'native_material_edit_readback',
                                               dict(capture=after, dispatch=action, preflight_evidence_id=proof))
-                result.update(status='native_material_edit_verified_not_saved', material=actual,
-                              evidence_id=evidence, business_dispatches=1, ipc_records=bridge.records)
+                status = 'native_quota_quantity_verified_not_saved' if quota_edit else 'native_material_edit_verified_not_saved'
+                result.update(status=status, evidence_id=evidence, business_dispatches=1,
+                              target_path=path, ipc_records=bridge.records)
+                result['quota' if quota_edit else 'material'] = actual
                 save_result(store, result, 'readback_verified')
                 return result
             except (ArithmeticError, ValueError, OSError, RuntimeError, KeyError) as exc:

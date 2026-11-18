@@ -7,13 +7,20 @@ from unittest.mock import patch
 from gccp_foundation.application.native_cli import Rejected
 from gccp_foundation.application.native_build import TEMPLATES
 from gccp_foundation.application.native_runtime import (
-    bounded_anchor_route, displayed_quantity, find_section_path, is_blank_quota, reviewed_family, render,
+    bounded_anchor_route, displayed_quantity, find_section_path, is_blank_quota, normalize_quantity, reviewed_family, render,
     resolve_vendor_identity,
 )
 from gccp_foundation.application.vendor_catalog import LIBRARY, match_live_entry
 
 
 class ScopedRuntimeTests(unittest.TestCase):
+    def test_zero_is_only_allowed_for_explicit_content_edit(self):
+        self.assertEqual(normalize_quantity('0.0', allow_zero=True), '0')
+        with self.assertRaises(Rejected):
+            normalize_quantity('0')
+        with self.assertRaises(Rejected):
+            normalize_quantity('-0.1', allow_zero=True)
+
     def test_vendor_identity_defaults_to_bundled_export_and_checks_live_unit(self):
         candidate = dict(code='4-102', name='型钢格栅 竖井', specialty='轨道', unit='t')
         live = dict(library=LIBRARY, candidates=[candidate], runtime='lookup.json')
@@ -167,6 +174,23 @@ class ScopedRuntimeTests(unittest.TestCase):
         edit = output['operations.h'].split('if(op=="quantity.normal.zero"', 1)[1].split('if(op=="name.set"', 1)[0]
         self.assertIn('quantity_cell_not_selected_by_insert', edit)
         self.assertNotIn('setCurrentIndex', edit)
+
+    def test_direct_anchor_still_verifies_the_selected_budget_row(self):
+        identity, quantity = reviewed_family(self.entry(), '50')
+        request = dict(command_id='test.direct', project_id='project.synthetic',
+                       parent_id=None, parent_sections=['管道铺设'], quantity=quantity,
+                       _state='C:/synthetic/state', save=False, selected_anchor=True)
+        anchor = ['3-196', '定', 'existing', '个', '1', '0', '1', '0', '0', '', '0', '', '']
+        with tempfile.TemporaryDirectory() as root:
+            output = render(TEMPLATES, Path(root), entry=self.entry(), identity=identity,
+                quantity=quantity, request=request, session=dict(pid=99, created_filetime='123', hwnd=987),
+                profile=Path('C:/synthetic/profile.json'), title_prefix='synthetic - ', owner=None,
+                budget_count=68, parent_name='管道铺设', parent_path='/0/1',
+                anchor_values=anchor, child_count=3, direct_anchor=True)
+        prepare = output['operations.h'].split('if(op=="prepare"){', 1)[1].split('if(op=="resume.done")', 1)[0]
+        self.assertIn('setCurrentIndex(QModelIndex)', prepare)
+        self.assertIn('anchor_navigation_model_changed', prepare)
+        self.assertIn('selected.sibling(selected.row(),0)!=target', prepare)
 
 
 if __name__=='__main__':unittest.main()

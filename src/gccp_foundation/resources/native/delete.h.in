@@ -79,7 +79,8 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         }
     } else {
         parent = project;
-        for (const auto &section : kSections) {
+        for (int depth = 0; depth < kSections.size(); ++depth) {
+            const auto &section = kSections[depth];
             QModelIndex match;
             parents = 0;
             if (model->rowCount(parent) > 500) { error = "division_bound"; return false; }
@@ -87,6 +88,19 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
                 auto row = model->index(r, 0, parent);
                 auto values = quotaValues(model, row);
                 if (values[1] == "部" && values[2] == section) { match = row; ++parents; }
+            }
+            if (kKind == "部" && depth == kSections.size() - 1) {
+                if (parents > 1) { error = "section_not_unique"; return false; }
+                if (match.isValid()) {
+                    const auto values = quotaValues(model, match);
+                    if (model->rowCount(match) != 0 || values[6] != "0" || values[8] != "0") {
+                        error = "section_not_empty";
+                        return false;
+                    }
+                    target = match; targets = 1;
+                }
+                parents = 1;
+                break;
             }
             if (parents != 1) { error = "parent_not_unique"; return false; }
             parent = match;
@@ -96,10 +110,11 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         error = "parent_not_unique";
         return false;
     }
-    for (int r = 0; r < model->rowCount(parent); ++r) {
+    for (int r = 0; kKind != "部" && r < model->rowCount(parent); ++r) {
         auto row = model->index(r, 0, parent);
         auto values = quotaValues(model, row);
-        if (values[1] == "定" && values[0] == kCode && values[2] == kName && values[3] == kUnit) {
+        if (values[1] == kKind && values[0] == kCode && values[2] == kName && values[3] == kUnit &&
+            (kSections.isEmpty() || values[6] == kQuantity) && (!kMatchNote || values[12] == kNote)) {
             target = row; ++targets;
         }
     }
@@ -181,7 +196,7 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
     }
     QPersistentModelIndex expected(target);
     QPointer<QAction> selectedAction(action);
-    if (kSections.isEmpty()) {
+    if (kSections.isEmpty() || kNavigateTarget) {
         const auto nav = budget->metaObject()->indexOfMethod("setCurrentIndex(QModelIndex)");
         if (nav < 0) { error = "budget_navigation_not_verified"; return false; }
         const auto method = budget->metaObject()->method(nav);
@@ -197,6 +212,10 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
             error = "nested_delete_target_not_current";
             return false;
         }
+    }
+    if (!expected.isValid() || quotaValues(model, expected) != req["expected_target"].toArray()) {
+        error = "delete_target_changed_after_navigation";
+        return false;
     }
     selection->select(target, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
     auto current = readPinnedCurrentIndex(view, reinterpret_cast<const void*>(currentGetter));

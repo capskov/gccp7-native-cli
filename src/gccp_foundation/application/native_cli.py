@@ -672,8 +672,9 @@ def main(argv=None):
         supplement.add_argument('--' + flag, required=True, type=Path)
     for flag in ('project-id', 'code', 'name', 'quantity', 'command-id'):
         supplement.add_argument('--' + flag, required=True)
-    supplement.add_argument('--unit', required=True, choices=('m', 'm2', 'm3', '段', '项', '套', '个'))
+    supplement.add_argument('--unit', required=True, choices=('m', 'm2', 'm3', '段', '项', '套', '个', '处', '道'))
     supplement.add_argument('--parent-section', required=True, action='append')
+    supplement.add_argument('--navigate-anchor', action='store_true')
     supplement.add_argument('--check-only', action='store_true',
                             help='Open the original form, check fields and cancel without changing the budget')
     material = sub.add_parser('material-edit', help='Edit one existing main material by verified row identity')
@@ -683,7 +684,23 @@ def main(argv=None):
                  'quota-note', 'material-code', 'expected', 'value'):
         material.add_argument('--' + flag, required=True)
     material.add_argument('--field', required=True, choices=('name', 'content'))
+    material.add_argument('--quota-name', help='Also match the full parent quota name')
+    material.add_argument('--quota-unit', help='Also match the parent quota unit')
     material.add_argument('--check-only', action='store_true')
+    quantity = sub.add_parser('quota-quantity', help='Update one existing quota quantity and read it back')
+    for flag in ('state', 'runtime-root'):
+        quantity.add_argument('--' + flag, required=True, type=Path)
+    for flag in ('project-id', 'command-id', 'path', 'quota-code', 'quota-name',
+                 'quota-unit', 'quota-note', 'expected', 'value'):
+        quantity.add_argument('--' + flag, required=True)
+    quantity.add_argument('--check-only', action='store_true')
+    save = sub.add_parser('project-save', help='Save the bound open project once and verify the changed file')
+    for flag in ('state', 'runtime-root'):
+        save.add_argument('--' + flag, required=True, type=Path)
+    save.add_argument('--project-id', required=True)
+    save.add_argument('--command-id', required=True)
+    save.add_argument('--save-timeout', type=int, default=DEFAULT_SAVE_TIMEOUT)
+    save.add_argument('--check-only', action='store_true')
     factor = sub.add_parser('quota-short-drive-factor', help='Apply the reviewed Beijing 2025 11-34 short-drive rule')
     for flag in ('state', 'runtime-root', 'inspector'):
         factor.add_argument('--' + flag, required=True, type=Path)
@@ -702,7 +719,19 @@ def main(argv=None):
     delete_parent.add_argument('--parent-section', action='append',
                                help='Exact parent path, repeat per level. The target row must already be current')
     deletion.add_argument('--expected-quantity', help='Exact displayed quantity required for section-path deletion')
+    deletion.add_argument('--expected-note', help='Also require this exact remark in section-path deletion')
+    deletion.add_argument('--kind', choices=('定', '换', '补'),
+                          help='Budget row category for section-path deletion (default: 定)')
+    deletion.add_argument('--navigate-target', action='store_true',
+                          help='Select the uniquely matched budget row using native navigation')
     deletion.add_argument('--mode', required=True, choices=('temporary', 'permanent'))
+    section_delete = sub.add_parser('section-delete', help='Remove one exact empty budget section')
+    for flag in ('state', 'runtime-root'):
+        section_delete.add_argument('--' + flag, required=True, type=Path)
+    section_delete.add_argument('--project-id', required=True)
+    section_delete.add_argument('--command-id', required=True)
+    section_delete.add_argument('--parent-section', required=True, action='append',
+                                help='Exact section path, including the empty section to remove')
     for operation, help_text in (
         ('quota-delete-confirm', 'Confirm the original pending permanent deletion'),
         ('quota-delete-reconcile', 'Verify the original pending permanent deletion without dispatch'),
@@ -756,7 +785,7 @@ def main(argv=None):
                 finally:
                     catalog.close()
         elif args.command == 'quota-candidates':
-            from .native_lookup import lookup
+            from .native_lookup import lookup, lookup_vendor
             code = args.code
             vendor = entry = None
             if args.vendor_id is not None:
@@ -774,13 +803,15 @@ def main(argv=None):
                 finally:
                     catalog.close()
                 code = entry['code']
-            data = lookup(args.state, args.runtime_root, args.project_id, code)
             if vendor is not None:
+                data = lookup_vendor(args.state, args.runtime_root, args.project_id, vendor)
                 data['vendor_entry'] = vendor
                 data['matched_candidate'] = match_live_entry(vendor, data)
-            elif entry is not None:
-                data['catalog_entry'] = entry
-                data['candidate_selection_required'] = True
+            else:
+                data = lookup(args.state, args.runtime_root, args.project_id, code)
+                if entry is not None:
+                    data['catalog_entry'] = entry
+                    data['candidate_selection_required'] = True
         elif args.command == 'quota-add':
             data = execute(args.state, args.db, args.runtime, json.loads(args.request.read_text(encoding='utf-8-sig')))
         elif args.command == 'command-reconcile':
@@ -811,6 +842,8 @@ def main(argv=None):
             from .native_supplement import supplement_quota
             request = dict(project_id=args.project_id, code=args.code, name=args.name, unit=args.unit,
                            quantity=args.quantity, command_id=args.command_id, parent_sections=args.parent_section)
+            if args.navigate_anchor:
+                request['navigate_anchor'] = True
             data = supplement_quota(args.state, args.runtime_root, args.inspector, request, check_only=args.check_only)
         elif args.command == 'material-edit':
             from .native_material_edit import edit_material
@@ -818,7 +851,22 @@ def main(argv=None):
                 'project_id', 'command_id', 'path', 'quota_code', 'quota_quantity', 'quota_note',
                 'material_code', 'field', 'expected', 'value',
             )}
+            for key in ('quota_name', 'quota_unit'):
+                if getattr(args, key) is not None:
+                    request[key] = getattr(args, key)
             data = edit_material(args.state, args.runtime_root, request, check_only=args.check_only)
+        elif args.command == 'quota-quantity':
+            from .native_material_edit import edit_material
+            request = {key: getattr(args, key) for key in (
+                'project_id', 'command_id', 'path', 'quota_code', 'quota_name', 'quota_unit', 'quota_note',
+                'expected', 'value',
+            )}
+            data = edit_material(args.state, args.runtime_root, {**request, 'field': 'quantity'},
+                                 check_only=args.check_only)
+        elif args.command == 'project-save':
+            from .native_project_save import save_project
+            data = save_project(args.state, args.runtime_root, args.project_id, args.command_id,
+                                args.save_timeout, check_only=args.check_only)
         elif args.command == 'quota-short-drive-factor':
             from .native_standard_factor import apply_short_drive_factor
             request = dict(project_id=args.project_id, quantity=args.quantity, command_id=args.command_id,
@@ -830,8 +878,22 @@ def main(argv=None):
             request = {k:getattr(args,k) for k in ('project_id','parent_id','code','name','unit','mode','command_id')}
             if args.parent_section is not None:
                 request.update(parent_sections=args.parent_section, expected_quantity=args.expected_quantity)
-            elif args.expected_quantity is not None:
-                raise Rejected('DELETE_SCOPE_INVALID', '--expected-quantity requires a section path')
+                if args.expected_note is not None:
+                    request['expected_note'] = args.expected_note
+                if args.kind is not None:
+                    request['kind'] = args.kind
+                if args.navigate_target:
+                    request['navigate_target'] = True
+            elif (args.expected_quantity is not None or args.expected_note is not None
+                  or args.kind is not None or args.navigate_target):
+                raise Rejected('DELETE_SCOPE_INVALID', 'Target filters and navigation require a section path')
+            data = delete_quota(args.state, args.runtime_root, request)
+        elif args.command == 'section-delete':
+            from .native_delete import delete_quota
+            request = dict(project_id=args.project_id, parent_id=None, code='', unit='',
+                           name=args.parent_section[-1], kind='部', mode='permanent',
+                           command_id=args.command_id, parent_sections=args.parent_section,
+                           expected_quantity='0', navigate_target=True)
             data = delete_quota(args.state, args.runtime_root, request)
         elif args.command in ('quota-delete-confirm', 'quota-delete-reconcile'):
             from .native_delete import confirm_pending_delete, reconcile_pending_delete

@@ -22,7 +22,16 @@ def render_lookup(directory, command, ctx, profile, title, code):
     return files
 
 
-def lookup(state, runtime_root, project_id, code):
+def lookup_vendor(state, runtime_root, project_id, vendor):
+    try:
+        return lookup(state, runtime_root, project_id, vendor['code'])
+    except Rejected as exc:
+        if exc.code != 'CANDIDATE_NOT_OBSERVED':
+            raise
+    return lookup(state, runtime_root, project_id, vendor['code'], search=vendor['name'])
+
+
+def lookup(state, runtime_root, project_id, code, *, search=None):
     if not code or len(code) > 80 or code != code.strip() or any(ord(c) < 32 for c in code):
         raise Rejected('INVALID_QUOTA_CODE', 'Provide one exact quota code')
     with closing(Ledger(state)) as store:
@@ -43,7 +52,8 @@ def lookup(state, runtime_root, project_id, code):
             command = 'lookup-' + uuid.uuid4().hex
             directory = Path(runtime_root).resolve()/'lookups'/command
             directory.mkdir(parents=True, exist_ok=False)
-            for name, content in render_lookup(directory, command, asdict(ctx), profile, project_window_prefix(meta['workcopy_path']), code).items():
+            for name, content in render_lookup(directory, command, asdict(ctx), profile,
+                                               project_window_prefix(meta['workcopy_path']), search or code).items():
                 (directory/name).write_text(content, encoding='utf-8', newline=chr(10))
             compile_bridge(directory)
             bridge = load_bridge(directory)

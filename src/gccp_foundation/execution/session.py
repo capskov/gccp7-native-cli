@@ -212,6 +212,8 @@ class SessionManager:
                 'native_quota_clone_partial_readback_verified_not_saved': 'native_quota_clone_readback',
                 'native_quota_material_name_readback_verified_not_saved': 'native_quota_material_name_readback',
                 'native_material_edit_verified_not_saved': 'native_material_edit_readback',
+                'native_quota_quantity_verified_not_saved': 'native_material_edit_readback',
+                'native_project_save_verified': 'native_project_save_readback',
             }.get(result.get('status'))
             if readback_kind and result.get('evidence_id'):
                 return result['evidence_id'], readback_kind

@@ -26,13 +26,16 @@ PIPE_SPECS = dict(zip(range(193, 209), [100,150,200,250,300,400,500,600,700,800,
 MAX_ANCHOR_STEPS = 32
 
 
-def normalize_quantity(quantity):
+def normalize_quantity(quantity, *, allow_zero=False):
     try:
         q = Decimal(str(quantity))
     except InvalidOperation as exc:
         raise Rejected('QUANTITY_INVALID', 'Finite positive quantity required') from exc
-    if not q.is_finite() or q <= 0 or q > 1000000 or q.as_tuple().exponent < -4:
-        raise Rejected('QUANTITY_NOT_REVIEWED', 'This internal worker accepts positive quantities up to 1000000 with at most four decimal places; insertion itself starts at zero')
+    if not q.is_finite() or q < 0 or (q == 0 and not allow_zero) or q > 1000000 or q.as_tuple().exponent < -4:
+        minimum = 'zero' if allow_zero else 'a positive number'
+        raise Rejected('QUANTITY_NOT_REVIEWED', f'Quantity must be {minimum} through 1000000, with at most four decimal places')
+    if q == 0:
+        return '0'
     value = format(q, 'f')
     if '.' in value:
         value = value.rstrip('0').rstrip('.')
@@ -118,7 +121,7 @@ def bounded_anchor_route(rows, cursor, anchor):
 
 def render(templates, directory, *, entry, identity, quantity, request, session, profile,
            title_prefix, owner, budget_count, parent_name, parent_path, anchor_values, child_count,
-           preceding_anchor_values=None, navigation_rows=()):
+           preceding_anchor_values=None, navigation_rows=(), direct_anchor=False):
     """Pure rendering of one fixed command contract; no process or file writes."""
     cpp = lambda value: json.dumps(value, ensure_ascii=False)
     blank = not anchor_values[0]
@@ -187,6 +190,27 @@ def render(templates, directory, *, entry, identity, quantity, request, session,
         }
 ''' + h[end:]
     if request.get('selected_anchor'):
+        if direct_anchor:
+            h = _replace(h, '        if(!target.isValid() || target.model()!=bm || !selected.isValid()',
+                         f'''        if(!prepareStage(req,"anchor-select-before",error))return false;
+        const QPointer<QWidget> guardedBudget(budget);
+        const QPointer<QAbstractItemModel> guardedModel(bm);
+        const QPersistentModelIndex expectedTarget(target);
+        const auto meta=budget->metaObject();
+        const int nav=meta->indexOfMethod("setCurrentIndex(QModelIndex)");
+        if(nav<0 || !expectedTarget.isValid() ||
+            QString(meta->method(nav).enclosingMetaObject()->className())!="GSPTableView" ||
+            !meta->method(nav).invoke(budget,Qt::DirectConnection,Q_ARG(QModelIndex,target))){{
+            error="anchor_navigation_unavailable";return false;
+        }}
+        out["application_selection_changed"]=true;
+        if(!prepareStage(req,"anchor-select-after",error))return false;
+        if(!guardedBudget || !guardedModel || !expectedTarget.isValid() ||
+            mg(bv)!=guardedModel.data() || rowValues(bm,expectedTarget)!={expected}){{
+            error="anchor_navigation_model_changed";return false;
+        }}
+        selected=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));
+        if(!target.isValid() || target.model()!=bm || !selected.isValid()''')
         if navigation_rows:
             route = ',\n            '.join(
                 'QJsonObject{{"path",' + cpp(row['row_path_session_only']) +
@@ -372,12 +396,12 @@ def resolve_vendor_identity(state, output_root, project_id, library_root, vendor
     root = library_root.resolve() if library_root is not None else None
     lookup_runtime = None
     if approved is None:
-        from .native_lookup import lookup
+        from .native_lookup import lookup_vendor
 
         vendor = vendor_entry(root, vendor_id)
         if root is not None:
             vendor['library_root'] = str(root)
-        live = lookup(state, output_root, project_id, vendor['code'])
+        live = lookup_vendor(state, output_root, project_id, vendor)
         unit = match_live_entry(vendor, live)['unit']
         lookup_runtime = live['runtime']
     else:
@@ -505,6 +529,7 @@ def prepare_entry(catalog_path, state, inspector_path, project_id, parent_id, qu
         anchor_check = None
         preceding_anchor_values = None
         navigation_rows = []
+        direct_anchor = False
         if parent_sections is not None:
             cursor = budget['current']
             def current_is(row):
@@ -518,11 +543,14 @@ def prepare_entry(catalog_path, state, inspector_path, project_id, parent_id, qu
                 preceding_anchor_values = children[-2]['values']
             if navigate_anchor and not current_is(anchor) and preceding_anchor_values is None:
                 navigation_rows = bounded_anchor_route(budget['rows'], cursor, anchor)
+                direct_anchor = cursor.get('verified') is True and not navigation_rows
             anchor_check = dict(path=anchor['row_path_session_only'], code=anchor['values'][0],
                 name=anchor['values'][2], selected=current_is(anchor),
                 trailing_blank_after_selected_quota=preceding_anchor_values is not None,
+                direct_navigation=direct_anchor,
                 navigation_paths=[row['row_path_session_only'] for row in navigation_rows])
-            if selected_anchor and not (anchor_check['selected'] or preceding_anchor_values is not None or navigation_rows):
+            if selected_anchor and not (anchor_check['selected'] or preceding_anchor_values is not None
+                                        or navigation_rows or direct_anchor):
                 raise Rejected('SECTION_ANCHOR_NOT_SELECTED', 'Select the final direct quota in the target section')
             if selected_anchor:
                 for row in children:
@@ -540,7 +568,8 @@ def prepare_entry(catalog_path, state, inspector_path, project_id, parent_id, qu
             title_prefix=project_window_prefix(meta['workcopy_path']), owner=project['owner'],
             budget_count=len(budget['rows']), parent_name=parent['values'][2],
             parent_path=parent['row_path_session_only'], anchor_values=anchor['values'], child_count=len(children),
-            preceding_anchor_values=preceding_anchor_values, navigation_rows=navigation_rows)
+            preceding_anchor_values=preceding_anchor_values, navigation_rows=navigation_rows,
+            direct_anchor=direct_anchor)
         for name, text in generated.items():
             (directory/name).write_text(text, encoding='utf-8', newline='\n')
         (directory/'request.json').write_text(json.dumps(request,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')

@@ -1,0 +1,45 @@
+#include <QAction>
+
+static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
+    const auto op = req["operation"].toString();
+    if (op == "inspect") return true;
+    if (op != "save.check" && op != "save") {
+        error = "operation_not_allowed";
+        return false;
+    }
+    if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
+        error = "dialog_or_popup_active";
+        return false;
+    }
+    QWidget *project = nullptr;
+    int windows = 0;
+    for (auto window : QApplication::topLevelWidgets()) {
+        if (window->isVisible() && window->isEnabled() && window->windowTitle() == req["window_title"].toString()) {
+            project = window;
+            ++windows;
+        }
+    }
+    if (windows != 1) { error = "save_window_not_unique"; return false; }
+    QSet<QAction*> matches;
+    const auto collect = [&matches](QAction *action) {
+        if (action->objectName() == "ToolbarSave" && action->text() == "保存" &&
+                action->thread() == qApp->thread() && action->isEnabled())
+            matches.insert(action);
+    };
+    for (auto action : project->findChildren<QAction*>()) collect(action);
+    for (auto widget : project->findChildren<QWidget*>())
+        for (auto action : widget->actions()) collect(action);
+    if (matches.size() != 1) { error = "save_action_not_unique"; return false; }
+    out["save_action_name"] = "ToolbarSave";
+    if (op == "save.check") return true;
+    static bool dispatched = false;
+    if (dispatched) { error = "save_already_dispatched"; return false; }
+    if (!prepareStage(req, "save-before", error)) return false;
+    dispatched = true;
+    if (!QMetaObject::invokeMethod(*matches.begin(), "trigger", Qt::QueuedConnection)) {
+        error = "save_not_queued";
+        return false;
+    }
+    out["business_dispatches"] = 1;
+    return true;
+}
