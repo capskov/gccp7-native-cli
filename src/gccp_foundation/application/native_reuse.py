@@ -201,6 +201,66 @@ def clone_quota(state, runtime_root, inspector, request):
                 raise Rejected('NEEDS_RECONCILIATION', str(exc)) from exc
 
 
+def reconcile_no_effect_paste(state, command_id):
+    """Keep previously verified copies when the final paste left the budget unchanged."""
+    with closing(Ledger(state)) as store:
+        initialize_commands(store)
+        record = store.db.execute('SELECT * FROM native_cli_commands WHERE command_id=?', (command_id,)).fetchone()
+        if record is None:
+            raise Rejected('COMMAND_CHANGED', 'The original clone command is required')
+        result = json.loads(record['result'] or '{}')
+        if result.get('status') == 'native_quota_clone_partial_readback_verified':
+            return {**result, 'receipt_only': True, 'new_business_dispatches': 0}
+        if record['phase'] != 'armed_unknown' or result.get('error') != 'Paste did not select the adjacent copy':
+            raise Rejected('CLONE_RECONCILIATION_UNAVAILABLE', 'No supported no-effect paste to verify')
+        project_id = record['project_id']
+        project = store.db.execute('SELECT * FROM projects WHERE project_id=?', (project_id,)).fetchone()
+        with execution_lock(store.root, project['file_id']):
+            if dict(store.db.execute('SELECT * FROM native_cli_commands WHERE command_id=?', (command_id,)).fetchone()) != dict(record):
+                raise Rejected('COMMAND_CHANGED', 'The original clone command changed')
+            ctx = SessionContext(**json.loads(project['metadata'])['session'])
+            profile = profile_path(ctx.profile_id)
+            SessionManager(store, WindowsDesktop(), RuntimeProfile.load(profile)).validate_session(ctx)
+            proof = store.read_evidence(result['preflight_evidence_id'], project_id)
+            request = proof['data']['request']
+            if (proof['kind'] != 'native_reuse_preflight' or proof['session_id'] != ctx.session_id
+                    or digest(request) != record['request_digest']):
+                raise Rejected('CLONE_EVIDENCE_MISMATCH', 'The original clone preflight must match')
+            ipc = result.get('ipc_records', [])[-3:]
+            records = [json.loads(Path(path).read_text(encoding='utf-8')) for path in ipc]
+            if [item['operation'] for item in records] != ['inspect', 'reuse.paste', 'inspect']:
+                raise Rejected('CLONE_EVIDENCE_MISMATCH', 'The final paste and its two observations are required')
+            before, dispatch, observed = [item.get('receipt', {}) for item in records]
+            if (records[1]['request'].get('outer_intent_id') != proof['data']['intent_id']
+                    or dispatch.get('status') != 'observed' or dispatch.get('business_dispatches') != 1
+                    or any(item.get('pid') != ctx.pid or item.get('created_filetime') != ctx.created_filetime
+                           for item in (before, dispatch, observed))):
+                raise Rejected('CLONE_EVIDENCE_MISMATCH', 'The final paste must belong to the bound original process')
+            baseline = rows(table(before, '工程量表达式'))
+            if rows(table(observed, '工程量表达式')) != baseline:
+                raise Rejected('CLONE_READBACK_CHANGED', 'The final paste changed the budget')
+            for clone in result.get('clones', []):
+                current = baseline.get(clone['path'], {}).get('values')
+                material = clone['material']
+                if current != clone['quota'] or not any(
+                        key.startswith(clone['path'] + '/') and item['values'][:4] == [
+                            material[0], '主', material[2], material[4]]
+                        for key, item in baseline.items()):
+                    raise Rejected('CLONE_READBACK_CHANGED', 'An earlier verified copy did not match')
+            bridge = load_bridge(Path(result['runtime']))
+            after = bridge.call('inspect')
+            if (after.get('pid') != ctx.pid or after.get('created_filetime') != ctx.created_filetime
+                    or rows(table(after, '工程量表达式')) != baseline):
+                raise Rejected('CLONE_READBACK_CHANGED', 'The fresh budget differs from the original paste readback')
+            evidence = store.put_evidence(project_id, ctx.session_id, 'native_quota_clone_partial_readback',
+                dict(capture=after, dispatch=dispatch, preflight_evidence_id=result['preflight_evidence_id']))
+            result.update(status='native_quota_clone_partial_readback_verified', evidence_id=evidence,
+                          new_business_dispatches=0, ipc_records=result['ipc_records'] + bridge.records)
+            result.pop('error', None)
+            save_result(store, result, 'readback_verified')
+            return result
+
+
 def paste_enabled(capture):
     return any(a['name'] == 'Paste' and a['enabled'] and a['visible'] for a in capture['reuse_actions'])
 

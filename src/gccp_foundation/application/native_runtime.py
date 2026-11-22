@@ -119,6 +119,22 @@ def bounded_anchor_route(rows, cursor, anchor):
     return route
 
 
+def quota_trace_note(command_id, item_label=None):
+    token = hashlib.sha256(command_id.encode()).hexdigest()[:8]
+    scope = f'[用途:{item_label}] ' if item_label else ''
+    return f'{scope}[CLI:{token}]'
+
+
+def quota_name_and_scope(name, note):
+    # Recognize scopes from past budgets as well as the current remark format.
+    name = re.sub(r' \[CLI:[0-9a-f]{8}\]$', '', name)
+    legacy = re.fullmatch(r'(.+) \[用途:([^\[\]]+)\]', name)
+    if legacy:
+        return legacy.group(1), legacy.group(2)
+    scope = re.match(r'^\[用途:([^\[\]]+)\](?: |$)', note)
+    return name, scope.group(1) if scope else ''
+
+
 def render(templates, directory, *, entry, identity, quantity, request, session, profile,
            title_prefix, owner, budget_count, parent_name, parent_path, anchor_values, child_count,
            preceding_anchor_values=None, navigation_rows=(), direct_anchor=False):
@@ -127,9 +143,7 @@ def render(templates, directory, *, entry, identity, quantity, request, session,
     blank = not anchor_values[0]
     anchor = child_count - 1
     inserted = anchor if blank else child_count
-    item_label = request.get('item_label')
-    scope_label = f' [用途:{item_label}]' if item_label else ''
-    label = scope_label + ' [CLI:' + hashlib.sha256(request['command_id'].encode()).hexdigest()[:8] + ']'
+    note = quota_trace_note(request['command_id'], request.get('item_label'))
     expected = 'QJsonArray{' + ','.join(cpp(v) for v in anchor_values) + '}'
     display = displayed_quantity(identity['unit'], quantity)
     h = (templates/'operations.h.in').read_text(encoding='utf-8')
@@ -137,7 +151,7 @@ def render(templates, directory, *, entry, identity, quantity, request, session,
     if request.get('selected_anchor') and len(identity['code']) <= 3 and len(family) >= 4:
         h = _replace(h, 'edits[0]->setText(__CANDIDATE_CODE__);',
                      'edits[0]->setText(QStringLiteral(' + cpp(family) + '));')
-    h = h.replace('[CLI v0.1测试]', label.strip())
+    h = _replace(h, '__TRACE_NOTE__', cpp(note))
     if sections := request.get('parent_sections'):
         start = h.index('    auto project=bm->index(0,0);QModelIndex parent;')
         end = h.index('    auto bv=', start)
@@ -327,7 +341,7 @@ def render(templates, directory, *, entry, identity, quantity, request, session,
                  'QString value=zero?QStringLiteral("0"):QStringLiteral(' + cpp(quantity) + ')')
     if request.get('selected_anchor'):
         start = h.index('        auto cell=bm->index(s.row,6,parent);', h.index('    if(op=="quantity.normal.zero"'))
-        end = h.index('\n    if(op=="name.set"', start)
+        end = h.index('\n    if(op=="note.set"', start)
         h = h[:start] + '''        const auto cell=bm->index(s.row,4,parent);
         const auto selected=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));
         if(selected!=bm->index(s.row,6,parent)){error="quantity_cell_not_selected_by_insert";return false;}
@@ -341,6 +355,7 @@ def render(templates, directory, *, entry, identity, quantity, request, session,
     }
 ''' + h[end:]
     transport = render_transport(templates, directory, request['command_id'], session, profile, title_prefix)
+    transport['bridge.cpp'] = _replace(transport['bridge.cpp'], '"name.set"', '"note.set"')
     worker = (templates/'worker.py.in').read_text(encoding='utf-8')
     worker = worker.replace('bridge_client_internal_v01_q', 'cli_bridge').replace('3200', hashlib.sha256(request['command_id'].encode()).hexdigest()[:12])
     worker = worker.replace('internal-v01-q-', 'command-')
@@ -360,7 +375,7 @@ def render(templates, directory, *, entry, identity, quantity, request, session,
     worker = _replace(worker, '   normalized[path]=original[path]', "   if path in original:normalized[path]=original[path]")
     worker = worker.replace("parts[1:3]==['0','2']", "parts[1:3]==" + repr(parent_path.strip('/').split('/')))
     imports = ('\nSTATE=Path(' + repr(request['_state']) + ')\nPROJECT=' + repr(request['project_id']) +
-               '\nEXPECTED_OWNER=' + repr(owner) + '\nPARENT_ID=' + repr(request['parent_id']) + '\nLABEL=' + repr(label) +
+               '\nEXPECTED_OWNER=' + repr(owner) + '\nPARENT_ID=' + repr(request['parent_id']) + '\nTRACE_NOTE=' + repr(note) +
                '\nTARGET_PATH=' + repr(f'{parent_path}/{inserted}') + '\nSAVE=' + repr(request.get('save', True)) + '\n')
     worker = worker.replace('\ndef main():', imports + '\ndef main():', 1)
     pattern = re.compile(r'__CANDIDATE_(CODE|NAME|UNIT|SPECIALTY)__')
@@ -557,8 +572,7 @@ def prepare_entry(catalog_path, state, inspector_path, project_id, parent_id, qu
                     values = row['values']
                     if values[:2] != [identity['code'], '定'] or values[3] != identity['unit']:
                         continue
-                    name = re.sub(r' \[CLI:[0-9a-f]{8}\]$', '', values[2])
-                    base, _, prior_scope = name.removesuffix(']').partition(' [用途:') if ' [用途:' in name else (name, '', '')
+                    base, prior_scope = quota_name_and_scope(values[2], values[12])
                     if base == identity['name'] and (item_label is None or item_label == prior_scope):
                         raise Rejected('DUPLICATE_SECTION_QUOTA', 'The exact quota already exists for this scope')
         directory.mkdir(parents=True, exist_ok=False)

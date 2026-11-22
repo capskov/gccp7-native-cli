@@ -18,7 +18,7 @@ def main():
    assert all(s.action_state(verified['job_id'],a)=='readback_verified' for a in ('insert','quantity'))
    from bridge_client_internal_v01_q import NativeBridge as ReadbackBridge
    fresh=ReadbackBridge().call('inspect',timeout=90)
-   quotas=[r for r in table(fresh,'工程量表达式')['rows'] if r['values'][0]==CODE and r['values'][2]==verified['quota_name']]
+   quotas=[r for r in table(fresh,'工程量表达式')['rows'] if r['values'][0]==CODE and r['values'][2]==NAME and r['values'][12]==TRACE_NOTE]
    assert len(quotas)==1 and quotas[0]['values'][6]=='1','Existing command result changed; no redispatch'
    assert not s.load_pending(PROJECT)
    print(json.dumps({**verified,'idempotent_reentry':True,'new_business_dispatches':0},ensure_ascii=False,indent=2));return
@@ -27,7 +27,7 @@ def main():
   manager=SessionManager(s,WindowsDesktop(),RuntimeProfile.load(PROFILE));row=s.db.execute('select * from projects where project_id=?',(PROJECT,)).fetchone();meta=json.loads(row['metadata']);ctx=SessionContext(**meta['session'])
   assert not s.load_pending(PROJECT) and not meta['dirty']
   b=NativeBridge();base=b.call('inspect',timeout=90);budget=table(base,'工程量表达式');assert len(budget['rows'])==71
-  assert not any(r['values'][2]==NAME+LABEL for r in budget['rows'])
+  assert not any(r['values'][12]==TRACE_NOTE for r in budget['rows'])
   manager.validate_session(ctx)
   if row['owner']:
    assert row['owner']==EXPECTED_OWNER
@@ -65,9 +65,10 @@ def main():
     if inserted and inserted['values'][:4]==[CODE,'定',NAME,UNIT]:break
     time.sleep(.3)
    else:raise RuntimeError('Insert result unresolved; no replay')
-   b.call('close',timeout=90);b.call('bind.inserted',timeout=90);b.call('name.set',intent,timeout=90)
-   zero=b.call('inspect',timeout=90);zb=table(zero,'工程量表达式');target=[r for r in zb['rows'] if r['row_path_session_only']==TARGET_PATH and r['values'][:4]==[CODE,'定',NAME+LABEL,UNIT]];assert len(target)==1 and target[0]['values'][6]=='0'
-   path=target[0]['row_path_session_only'];index=int(path.rsplit('/',1)[1]);original=rows(budget);normalized={}
+   b.call('close',timeout=90);b.call('bind.inserted',timeout=90);b.call('note.set',intent,timeout=90)
+   zero=b.call('inspect',timeout=90);zb=table(zero,'工程量表达式');target=rows(zb)[TARGET_PATH]['values']
+   assert target[:4]==[CODE,'定',NAME,UNIT] and target[6]=='0' and target[12]==TRACE_NOTE
+   path=TARGET_PATH;original=rows(budget);normalized={}
    for r in zb['rows']:
     k=r['row_path_session_only']
     if k==path or k.startswith(path+'/'):continue
@@ -90,6 +91,7 @@ def main():
     b.call('resources.return.quota',timeout=90)
    after=b.call('inspect',timeout=90);write_new(ROOT/'internal-v01-q-final-capture.json',after)
    ab=table(after,'工程量表达式');v=rows(ab)[path]['values'];assert v[0]==CODE and v[6]=='1'
+   assert v[2]==NAME and v[12]==TRACE_NOTE
    resources=table(after,'单位');assert resources['complete'] and len(resources['rows'])>0,'Quantity entered; resource panel empty; stop for user observation'
    assert table(after,'工程量表达式')['current']['row_path_session_only']==path
    assert any(r['values'][7] not in ('','0') for r in resources['rows']),'No resource quantity update observed'

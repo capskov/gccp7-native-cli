@@ -133,6 +133,7 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
             values[6] == "0" && values[8] == "0" && row.data(Qt::FontRole).value<QFont>().strikeOut();
         if (temporaryReadback &&
             currentIndexEvidence(model, row)["row_path_session_only"] != readbackTarget[0]) continue;
+        if (!kPath.isEmpty() && currentIndexEvidence(model, row)["row_path_session_only"].toString() != kPath) continue;
         if (values[1] == kKind && values[0] == kCode && values[2] == kName && values[3] == kUnit &&
             (kSections.isEmpty() || values[6] == kQuantity || temporarilyDeleted) && (!kMatchNote || values[12] == kNote)) {
             target = row; ++targets;

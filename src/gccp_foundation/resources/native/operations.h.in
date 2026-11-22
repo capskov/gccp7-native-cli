@@ -11,7 +11,7 @@
 #include <QPersistentModelIndex>
 #include <QKeyEvent>
 static QString quotaName(){return QStringLiteral(__CANDIDATE_NAME__);}
-static QString testNote(){return QStringLiteral("POC01-20261102B-TEST 保留检查");}
+static QString traceNote(){return QStringLiteral(__TRACE_NOTE__);}
 struct FlowState {
     int row=-1;bool inserted=false,materialConfirmed=false,noteDone=false,quantityDone=false,saved=false;
     QPointer<QWidget> editor,view;QPointer<QAbstractItemModel> editModel;
@@ -69,7 +69,7 @@ static bool editorCommit(bool note,QJsonObject &out,QString &error){
         error="editor_commit_lifetime_guard";return false;}
     int n=s.view->metaObject()->indexOfMethod("commitDataAndCloseEditor()");if(n<0){error="native_commit_missing";return false;}auto method=s.view->metaObject()->method(n);
     if(QString(method.enclosingMetaObject()->className())!="GlodonAbstractItemView" || method.returnType()!=QMetaType::Bool){error="native_commit_signature_changed";return false;}
-    const QString value=note?testNote():QStringLiteral("1");s.editorWritten=true;
+    const QString value=note?traceNote():QStringLiteral("1");s.editorWritten=true;
     if(auto e=qobject_cast<QLineEdit*>(s.editor.data()))e->setText(value);
     else if(auto e=qobject_cast<QPlainTextEdit*>(s.editor.data()))e->setPlainText(value);
     else if(auto e=qobject_cast<QTextEdit*>(s.editor.data()))e->setPlainText(value);
@@ -82,7 +82,7 @@ static bool editorCommit(bool note,QJsonObject &out,QString &error){
 }
 static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &error){
     auto op=req["operation"].toString();auto &s=flow();
-    if(!QStringList{"inspect","prepare","save","open","resources.return.quota","search","select","insert","material.peek","material.confirm","close","bind.inserted","name.set","quantity.normal.one","resources.key.up"}.contains(op)){error="operation_not_allowed";return false;}
+    if(!QStringList{"inspect","prepare","save","open","resources.return.quota","search","select","insert","material.peek","material.confirm","close","bind.inserted","note.set","quantity.normal.one","resources.key.up"}.contains(op)){error="operation_not_allowed";return false;}
     auto mod=GetModuleHandleW(L"GLDTableView.dll");auto mg=reinterpret_cast<ModelGetter>(GetProcAddress(mod,"?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
     auto sg=reinterpret_cast<SelectionGetter>(GetProcAddress(mod,"?selectionModel@GlodonAbstractItemView@@QEBAPEAVGLDItemSelectionModel@@XZ"));auto cg=GetProcAddress(mod,"?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
     if(!mg || !sg || !cg){error="fixed_getter_missing";return false;}
@@ -140,7 +140,7 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     if(parents!=1 || bm->rowCount(parent)>100){error="parent_not_unique";return false;}
     auto bv=budget->qt_metacast("GlodonAbstractItemView");
     if(op=="resources.return.quota"){
-        QModelIndex wanted;int matches=0;for(int r=0;r<bm->rowCount(parent);++r){auto i=bm->index(r,0,parent);auto v=rowValues(bm,i);if(v[0]==__CANDIDATE_CODE__ && v[2]==quotaName()+" [CLI v0.1测试]" && v[6]=="1"){wanted=i;++matches;}}
+        QModelIndex wanted;int matches=0;for(int r=0;r<bm->rowCount(parent);++r){auto i=bm->index(r,0,parent);auto v=rowValues(bm,i);if(v[0]==__CANDIDATE_CODE__ && v[2]==quotaName() && v[12]==traceNote() && v[6]=="1"){wanted=i;++matches;}}
         if(matches!=1){error="quantity_one_target_not_unique";return false;}
         for(int n=0;n<4;++n){auto cur=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));if(cur.sibling(cur.row(),0)==wanted){out["normal_up_count"]=n;return true;}
             bool child=false;for(auto i=cur.parent();i.isValid();i=i.parent())if(i==wanted)child=true;
@@ -182,7 +182,7 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     if(op=="resume.done"){
         if(s.row>=0 || nq || req["outer_intent_id"].toString().size()!=39 || bm->rowCount(parent)<5){error="resume_done_guard";return false;}
         auto i=bm->index(5,0,parent);auto v=rowValues(bm,i);
-        if(v[0]!=__CANDIDATE_CODE__ || v[2]!=quotaName()+" [CLI v0.1测试]" || v[3]!=__CANDIDATE_UNIT__ || (v[6]!="1" && v[6]!="0") || (v[8]!="197.23" && v[8]!="0")){
+        if(v[0]!=__CANDIDATE_CODE__ || v[2]!=quotaName() || v[12]!=traceNote() || v[3]!=__CANDIDATE_UNIT__ || (v[6]!="1" && v[6]!="0") || (v[8]!="197.23" && v[8]!="0")){
             error="resume_done_business_state_mismatch";return false;}
         s.row=5;s.inserted=s.materialConfirmed=s.noteDone=true;s.quantityDone=v[6]=="1";
         out["resumed_save_only_without_business_redispatch"]=true;return true;
@@ -190,9 +190,9 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     if(op=="resume"){
         if(s.row>=0 || nq || req["outer_intent_id"].toString().size()!=39 || bm->rowCount(parent)<5){error="resume_guard";return false;}
         auto i=bm->index(5,0,parent);auto v=rowValues(bm,i);
-        if(v[0]!=__CANDIDATE_CODE__ || (v[2]!=quotaName() && v[2]!=quotaName()+" [CLI v0.1测试]") || v[3]!=__CANDIDATE_UNIT__ || v[6]!="0" || v[8]!="0" || (v[12]!="" && v[12]!=testNote())){
+        if(v[0]!=__CANDIDATE_CODE__ || v[2]!=quotaName() || v[3]!=__CANDIDATE_UNIT__ || v[6]!="0" || v[8]!="0" || (v[12]!="" && v[12]!=traceNote())){
             error="resume_inserted_identity_not_verified";return false;}
-        s.row=5;s.inserted=true;s.materialConfirmed=true;s.noteDone=v[2]==quotaName()+" [CLI v0.1测试]";
+        s.row=5;s.inserted=true;s.materialConfirmed=true;s.noteDone=v[12]==traceNote();
         out["resumed_without_insert"]=true;out["target_values"]=v;return true;
     }
     if(op=="bind.inserted"){
@@ -222,7 +222,7 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     }
     if(op=="quantity.normal.zero" || op=="quantity.normal.one"){
         static int phase=0;const bool zero=op=="quantity.normal.zero";
-        if((zero && phase!=0) || (!zero && phase!=0 && phase!=1) || targetValues[0]!=__CANDIDATE_CODE__ || targetValues[2]!=quotaName()+" [CLI v0.1测试]" ||
+        if((zero && phase!=0) || (!zero && phase!=0 && phase!=1) || targetValues[0]!=__CANDIDATE_CODE__ || targetValues[2]!=quotaName() || targetValues[12]!=traceNote() ||
            targetValues[3]!=__CANDIDATE_UNIT__ || targetValues[6]!=(zero?QStringLiteral("1"):QStringLiteral("0"))){error="normal_quantity_phase_guard";return false;}
         auto cell=bm->index(s.row,6,parent);out["quantity_cell_flags"]=int(bm->flags(cell));
         if(!(bm->flags(cell)&Qt::ItemIsEditable)){error="normal_quantity_not_editable";return false;}
@@ -252,21 +252,21 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
         out["qt_confirmation_events"]=1;out["quantity_field_write_dispatches"]=1;
         return true;
     }
-    if(op=="name.set" || op=="quantity.set"){
-        const bool name=op=="name.set";
+    if(op=="note.set" || op=="quantity.set"){
+        const bool note=op=="note.set";
         if(!s.inserted || nq || targetValues[0]!=__CANDIDATE_CODE__ || targetValues[3]!=__CANDIDATE_UNIT__ || targetValues[6]!="0" ||
-           (targetValues[2]!=quotaName() && targetValues[2]!=quotaName()+" [CLI v0.1测试]") || (!name && !s.noteDone)){
+           targetValues[2]!=quotaName() || (note && targetValues[12]!="" && targetValues[12]!=traceNote()) || (!note && !s.noteDone)){
             error="fixed_model_field_precondition";return false;}
-        const int column=name?2:4;auto cell=bm->index(s.row,column,parent);const int flags=int(bm->flags(cell));
+        const int column=note?12:4;auto cell=bm->index(s.row,column,parent);const int flags=int(bm->flags(cell));
         out["field_flags"]=flags;out["field_header"]=bm->headerData(column,Qt::Horizontal).toString();out["before_edit_role"]=QJsonValue::fromVariant(cell.data(Qt::EditRole));
         if(!(flags & int(Qt::ItemIsEditable))){error="model_field_not_editable";return false;}
-        if(name && s.noteDone){out["already_labelled"]=true;return true;}
-        if(!name && s.quantityDone){error="quantity_once_guard";return false;}
-        const QString value=name?quotaName()+" [CLI v0.1测试]":QStringLiteral("1");
-        if(name)s.noteDone=true;else s.quantityDone=true;
+        if(note && s.noteDone){out["already_labelled"]=true;return true;}
+        if(!note && s.quantityDone){error="quantity_once_guard";return false;}
+        const QString value=note?traceNote():QStringLiteral("1");
         bool accepted=bm->setData(cell,QVariant(value),Qt::EditRole);
         out["model_set_data_returned"]=accepted;out["field_write_dispatches"]=1;out["immediate_values"]=rowValues(bm,target);
-        if(!accepted){error="model_field_write_not_accepted";return false;}return true;
+        if(!accepted){error="model_field_write_not_accepted";return false;}
+        if(note)s.noteDone=true;else s.quantityDone=true;return true;
     }
     if(op=="resources.key.up"){
         auto cur=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));
@@ -283,7 +283,7 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
         if(matches!=1){error="resource_tab_not_unique";return false;}bar->setCurrentIndex(tab);return true;
     }
     if(op=="save"){
-        if(s.saved || !s.noteDone || !s.quantityDone || sa!=1 || targetValues[6]!="1" || targetValues[2]!=quotaName()+" [CLI v0.1测试]"){
+        if(s.saved || !s.noteDone || !s.quantityDone || sa!=1 || targetValues[6]!="1" || targetValues[2]!=quotaName() || targetValues[12]!=traceNote()){
             error="save_preconditions";return false;}
         out["save_action_name"]=saveAction->objectName();
         s.saved=true;out["save_queued"]=QMetaObject::invokeMethod(saveAction,"trigger",Qt::QueuedConnection);return out["save_queued"].toBool();

@@ -78,3 +78,9 @@ class DeleteLifecycleTests(unittest.TestCase):
             'temporary', capture(), {'native_delete_queued': True}, capture(),
             expected_status='native_delete_no_effect_verified')
         self.assertEqual(calls, ['inspect', 'quota.delete', 'inspect'])
+
+    def test_permanent_no_effect_without_dialog_is_verified_and_does_not_replay(self):
+        calls = self.run_delete(
+            'permanent', capture(), {'native_delete_queued': True}, capture(),
+            expected_status='native_delete_no_effect_verified')
+        self.assertEqual(calls, ['inspect', 'quota.delete', 'inspect'])

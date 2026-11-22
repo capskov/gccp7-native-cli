@@ -332,7 +332,7 @@ def reconcile_pre_dispatch_stop(store, worker, request, original, result, *, can
 
 def reconcile_rounded_quantity(store, worker, config, request, result):
     from .native_build import profile_path
-    from .native_runtime import displayed_quantity, is_blank_quota
+    from .native_runtime import displayed_quantity, is_blank_quota, quota_trace_note
     from .native_worker_support import RuntimeProfile, SessionManager, WindowsDesktop, execution_lock, rows, snap, table
     from .ports import DispatchReceipt, Observation, SessionContext
     from gccp_foundation.domain.errors import DispatchState
@@ -385,9 +385,13 @@ def reconcile_rounded_quantity(store, worker, config, request, result):
             raise Rejected('NATIVE_READBACK_CHANGED', 'Fresh budget differs from the original post-write observation')
         previous, current = rows(table(before['data']['capture'], '工程量表达式')), rows(budget)
         quota = current[path]['values']
-        suffix = ' [CLI:' + hashlib.sha256(command_id.encode()).hexdigest()[:8] + ']'
-        if (quota[:5] != [expected['code'], '定', expected['name'] + suffix, expected['unit'], request['quantity']]
-                or quota[6] != display or previous[path]['values'][6] != '0'):
+        original_quota = previous[path]['values']
+        note = quota_trace_note(command_id, request.get('item_label'))
+        identity = (quota[2], quota[12])
+        valid_identities = {(expected['name'], note), (f"{expected['name']} {note}", '')}
+        if (identity not in valid_identities or identity != (original_quota[2], original_quota[12])
+                or quota[:2] != [expected['code'], '定'] or quota[3:5] != [expected['unit'], request['quantity']]
+                or quota[6] != display or original_quota[6] != '0'):
             raise Rejected('NATIVE_READBACK_CHANGED', 'The exact inserted item and quantity expression must match')
         parent, slot = path.rsplit('/', 1)
         blank = f'{parent}/{int(slot)+1}'
@@ -630,6 +634,9 @@ def main(argv=None):
     clone.add_argument('--quantity')
     clone.add_argument('--variants', type=Path, help='JSON array of material_name and quantity pairs, copied from one source')
     clone.add_argument('--parent-section', action='append', required=True)
+    clone_reconcile = sub.add_parser('quota-clone-reconcile', help='Verify completed copies after a documented no-effect paste')
+    clone_reconcile.add_argument('--state', required=True, type=Path)
+    clone_reconcile.add_argument('--command-id', required=True)
     quota = sub.add_parser('quota-add'); quota.add_argument('--db', type=Path)
     quota.add_argument('--runtime', required=True, type=Path); quota.add_argument('--request', required=True, type=Path)
     quota.add_argument('--state', required=True, type=Path)
@@ -658,7 +665,7 @@ def main(argv=None):
         p.add_argument('--vendor-id', type=int, help='Exact subitem ID from catalog search')
         p.add_argument('--library-root', type=Path, help='Use this installed library instead of the bundled export')
         p.add_argument('--expect-unit', help='With --vendor-id, require this exact live unit before insertion')
-        p.add_argument('--item-label', help='Distinct work scope to display in an existing section; the same scope cannot be inserted twice')
+        p.add_argument('--item-label', help='Distinct work scope written to the remark; the same scope cannot be inserted twice')
         p.add_argument('--candidate-code', help='Exact GCCP code for catalog-free execution')
         p.add_argument('--candidate-unit', help='Exact GCCP unit for catalog-free execution')
         p.add_argument('--candidate-name', help='Exact name from the GCCP candidate table')
@@ -672,7 +679,7 @@ def main(argv=None):
         supplement.add_argument('--' + flag, required=True, type=Path)
     for flag in ('project-id', 'code', 'name', 'quantity', 'command-id'):
         supplement.add_argument('--' + flag, required=True)
-    supplement.add_argument('--unit', required=True, choices=('m', 'm2', 'm3', '段', '项', '套', '个', '处', '道'))
+    supplement.add_argument('--unit', required=True, choices=('m', 'm2', 'm3', '段', '项', '套', '组', '个', '处', '道'))
     supplement.add_argument('--parent-section', required=True, action='append')
     supplement.add_argument('--navigate-anchor', action='store_true')
     supplement.add_argument('--check-only', action='store_true',
@@ -683,7 +690,7 @@ def main(argv=None):
     for flag in ('project-id', 'command-id', 'path', 'quota-code', 'quota-quantity',
                  'quota-note', 'material-code', 'expected', 'value'):
         material.add_argument('--' + flag, required=True)
-    material.add_argument('--field', required=True, choices=('name', 'content'))
+    material.add_argument('--field', required=True, choices=('name', 'content', 'quota-name', 'quota-note', 'concrete-grade'))
     material.add_argument('--quota-name', help='Also match the full parent quota name')
     material.add_argument('--quota-unit', help='Also match the parent quota unit')
     material.add_argument('--resource-content', action='store_true',
@@ -693,6 +700,7 @@ def main(argv=None):
     resource_reconcile = sub.add_parser('resource-edit-reconcile', help='Verify an original resource edit without replay')
     resource_reconcile.add_argument('--state', required=True, type=Path)
     resource_reconcile.add_argument('--command-id', required=True)
+    resource_reconcile.add_argument('--inspector', type=Path)
     quantity = sub.add_parser('quota-quantity', help='Update one existing quota quantity and read it back')
     for flag in ('state', 'runtime-root'):
         quantity.add_argument('--' + flag, required=True, type=Path)
@@ -700,6 +708,32 @@ def main(argv=None):
                  'quota-unit', 'quota-note', 'expected', 'value'):
         quantity.add_argument('--' + flag, required=True)
     quantity.add_argument('--check-only', action='store_true')
+    cancel_quantity = sub.add_parser('quota-quantity-cancel', help='Cancel a pending quantity detail warning')
+    cancel_quantity.add_argument('--state', required=True, type=Path)
+    cancel_quantity.add_argument('--command-id', required=True)
+    rename_section = sub.add_parser('section-rename', help='Rename one verified budget section')
+    for flag in ('state', 'runtime-root'):
+        rename_section.add_argument('--' + flag, required=True, type=Path)
+    for flag in ('project-id', 'command-id', 'path', 'expected', 'value'):
+        rename_section.add_argument('--' + flag, required=True)
+    rename_section.add_argument('--check-only', action='store_true')
+    rename_project = sub.add_parser('project-rename', help='Rename the verified root project node')
+    for flag in ('state', 'runtime-root'):
+        rename_project.add_argument('--' + flag, required=True, type=Path)
+    for flag in ('project-id', 'command-id', 'expected', 'value'):
+        rename_project.add_argument('--' + flag, required=True)
+    rename_project.add_argument('--check-only', action='store_true')
+    rename_unit = sub.add_parser('unit-rename', help='Rename a unit under the verified project')
+    for flag in ('state', 'runtime-root'):
+        rename_unit.add_argument('--' + flag, required=True, type=Path)
+    for flag in ('project-id', 'command-id', 'project-name', 'expected', 'value'):
+        rename_unit.add_argument('--' + flag, required=True)
+    rename_unit.add_argument('--check-only', action='store_true')
+    select_unit = sub.add_parser('unit-select', help='Select a unit and verify its budget view')
+    for flag in ('state', 'runtime-root'):
+        select_unit.add_argument('--' + flag, required=True, type=Path)
+    for flag in ('project-id', 'project-name', 'unit-name', 'expected-section'):
+        select_unit.add_argument('--' + flag, required=True)
     save = sub.add_parser('project-save', help='Save the bound open project once and verify the changed file')
     for flag in ('state', 'runtime-root'):
         save.add_argument('--' + flag, required=True, type=Path)
@@ -726,7 +760,8 @@ def main(argv=None):
                                help='Exact parent path, repeat per level. The target row must already be current')
     deletion.add_argument('--expected-quantity', help='Exact displayed quantity required for section-path deletion')
     deletion.add_argument('--expected-note', help='Also require this exact remark in section-path deletion')
-    deletion.add_argument('--kind', choices=('定', '换', '补', '主'),
+    deletion.add_argument('--path', help='Also require the reviewed current row path in section-path deletion')
+    deletion.add_argument('--kind', choices=('定', '换', '借', '补', '主'),
                           help='Budget row category for section-path deletion (default: 定)')
     deletion.add_argument('--parent-quota', help='Full parent quota name for temporary main material deletion')
     deletion.add_argument('--navigate-target', action='store_true',
@@ -855,7 +890,7 @@ def main(argv=None):
             data = supplement_quota(args.state, args.runtime_root, args.inspector, request, check_only=args.check_only)
         elif args.command == 'resource-edit-reconcile':
             from .native_material_edit import reconcile_resource_edit
-            data = reconcile_resource_edit(args.state, args.command_id)
+            data = reconcile_resource_edit(args.state, args.command_id, inspector=args.inspector)
         elif args.command == 'material-edit':
             from .native_material_edit import edit_material
             request = {key: getattr(args, key) for key in (
@@ -882,6 +917,24 @@ def main(argv=None):
             )}
             data = edit_material(args.state, args.runtime_root, {**request, 'field': 'quantity'},
                                  check_only=args.check_only)
+        elif args.command == 'quota-quantity-cancel':
+            from .native_material_edit import cancel_pending_quantity_edit
+            data = cancel_pending_quantity_edit(args.state, args.command_id)
+        elif args.command in ('section-rename', 'project-rename', 'unit-rename'):
+            from .native_material_edit import edit_material
+            request = {key: getattr(args, key) for key in (
+                'project_id', 'command_id', 'expected', 'value',
+            )}
+            request.update(path=getattr(args, 'path', ''), field={
+                'section-rename': 'section-name', 'project-rename': 'project-name', 'unit-rename': 'unit-name',
+            }[args.command])
+            if args.command == 'unit-rename':
+                request['project_name'] = args.project_name
+            data = edit_material(args.state, args.runtime_root, request, check_only=args.check_only)
+        elif args.command == 'unit-select':
+            from .native_material_edit import select_project_unit
+            data = select_project_unit(args.state, args.runtime_root, args.project_id,
+                                       args.project_name, args.unit_name, args.expected_section)
         elif args.command == 'project-save':
             from .native_project_save import save_project
             data = save_project(args.state, args.runtime_root, args.project_id, args.command_id,
@@ -899,12 +952,16 @@ def main(argv=None):
                 request.update(parent_sections=args.parent_section, expected_quantity=args.expected_quantity)
                 if args.expected_note is not None:
                     request['expected_note'] = args.expected_note
+                if args.path is not None:
+                    request['path'] = args.path
                 if args.kind is not None:
                     request['kind'] = args.kind
                 if args.parent_quota is not None:
                     request['parent_quota'] = args.parent_quota
                 if args.navigate_target:
                     request['navigate_target'] = True
+            elif args.path is not None:
+                raise Rejected('DELETE_SCOPE_INVALID', '--path requires --parent-section')
             elif (args.expected_quantity is not None or args.expected_note is not None
                   or args.kind is not None or args.parent_quota is not None or args.navigate_target):
                 raise Rejected('DELETE_SCOPE_INVALID', 'Target filters and navigation require a section path')
@@ -922,6 +979,9 @@ def main(argv=None):
                 data = confirm_pending_delete(args.state, args.command_id, reviewed_file_sha256=args.reviewed_file_sha256)
             else:
                 data = reconcile_pending_delete(args.state, args.command_id)
+        elif args.command == 'quota-clone-reconcile':
+            from .native_reuse import reconcile_no_effect_paste
+            data = reconcile_no_effect_paste(args.state, args.command_id)
         elif args.command == 'quota-clone':
             from .native_reuse import clone_quota
             request = {key: getattr(args, key) for key in ('project_id', 'command_id', 'code', 'quota_name',

@@ -160,7 +160,11 @@ class ScopedRuntimeTests(unittest.TestCase):
         self.assertIn('matches!=1 || match.row()!=sectionRows[depth]', output['operations.h'])
         self.assertIn("TARGET_PATH='/0/1/0/2'", output['worker.py'])
         self.assertIn('SAVE=False', output['worker.py'])
-        self.assertIn(' [用途:独立工32a双拼对撑] [CLI:', output['worker.py'])
+        self.assertIn("TRACE_NOTE='[用途:独立工32a双拼对撑] [CLI:", output['worker.py'])
+        self.assertIn('target[:4]==[CODE,\'定\',NAME,UNIT]', output['worker.py'])
+        self.assertIn('target[12]==TRACE_NOTE', output['worker.py'])
+        self.assertIn('column=note?12:4', output['operations.h'])
+        self.assertNotIn('name.set', output['bridge.cpp'])
         self.assertIn('candidateRows>MAX_OBSERVED_ROWS', output['operations.h'])
         prepare = output['operations.h'].split('if(op=="prepare"){', 1)[1].split('if(op=="resume.done")', 1)[0]
         self.assertIn('section_anchor_not_selected', prepare)
@@ -171,9 +175,31 @@ class ScopedRuntimeTests(unittest.TestCase):
         self.assertNotIn('setCurrentIndex', prepare)
         self.assertNotIn('activateWindow', prepare)
         self.assertNotIn('setFocus', prepare)
-        edit = output['operations.h'].split('if(op=="quantity.normal.zero"', 1)[1].split('if(op=="name.set"', 1)[0]
+        edit = output['operations.h'].split('if(op=="quantity.normal.zero"', 1)[1].split('if(op=="note.set"', 1)[0]
         self.assertIn('quantity_cell_not_selected_by_insert', edit)
         self.assertNotIn('setCurrentIndex', edit)
+
+    def test_quota_scope_reads_current_remark_and_legacy_name(self):
+        from gccp_foundation.application.native_runtime import quota_name_and_scope, quota_trace_note
+
+        name = '球墨铸铁管管件安装 公称直径 250'
+        note = quota_trace_note('test.scope', '独立接口')
+        self.assertEqual(quota_name_and_scope(name, note), (name, '独立接口'))
+        self.assertEqual(quota_name_and_scope(f'{name} {note}', ''), (name, '独立接口'))
+        self.assertEqual(quota_name_and_scope(name, quota_trace_note('test.scope')), (name, ''))
+
+    def test_remark_insertion_does_not_change_existing_material_edit_guard(self):
+        from gccp_foundation.application.native_material_edit import build_material_bridge
+
+        meta = dict(session=dict(pid=99, created_filetime='123', hwnd=987),
+                    workcopy_path='C:/synthetic/sample.GPB7')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'material-edit'
+            with patch('gccp_foundation.application.native_material_edit.compile_bridge'), \
+                 patch('gccp_foundation.application.native_material_edit.load_bridge'):
+                build_material_bridge(path, 'test.edit', meta, Path(root) / 'profile.json')
+            bridge = (path / 'bridge.cpp').read_text(encoding='utf-8')
+        self.assertIn('const bool mutation=op == "material.edit";', bridge)
 
     def test_direct_anchor_still_verifies_the_selected_budget_row(self):
         identity, quantity = reviewed_family(self.entry(), '50')

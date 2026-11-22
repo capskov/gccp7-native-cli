@@ -5,7 +5,7 @@
 **GCCP7 Native CLI** provides native quota lookup, insertion with initial quantity, supplemental items, deletion and audited readback for Glodon GCCP7.
 
 - **Agent 入口**：[命令地图](docs/agent-commands.md) · [主技能](.agents/skills/gccp7-native-cli/SKILL.md) · [llms.txt](llms.txt)
-- **当前版本** `0.2.0b6`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
+- **当前版本** `0.2.0b8`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
 
 | 入口 | 当前范围 |
 | --- | --- |
@@ -101,7 +101,7 @@ $binding.data | Select-Object project_id, inspector, parents
 
 删除时输入精确父项、编号、名称和单位。示例用 `temporary`，永久删除用 `permanent`。删除命令返回同进程回读，工程保存由操作者安排。
 
-从 `0.2.0b6` 起，临时删除预检超时会标记为未派发。若命令已派发但结果未确认，保留原命令号和回执，按[诊断与恢复](docs/diagnostics.md)只读核对删除线、预算和合价，再决定下一步。
+临时删除预检超时会标记为未派发。若命令已派发但结果未确认，保留原命令号和回执，按[诊断与恢复](docs/diagnostics.md)只读核对删除线、预算和合价，再决定下一步。
 
 ```powershell
 & $gccp quota-delete --state .\state --runtime-root .\runtime `

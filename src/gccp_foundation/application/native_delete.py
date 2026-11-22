@@ -35,6 +35,7 @@ def build_bridge(directory, profile, session, title, request, *, confirm_only=Fa
         'kUnit': request['unit'], 'kAction': action, 'kActionText': label,
         'kQuantity': request.get('expected_quantity') or '',
         'kKind': request.get('kind', '定'), 'kNote': request.get('expected_note', ''),
+        'kPath': request.get('path', ''),
         'kParentQuota': request.get('parent_quota', ''),
     }
     header = ''.join(f'static const QString {name} = QStringLiteral({json.dumps(value, ensure_ascii=False)});\n'
@@ -116,6 +117,8 @@ def delete_quota(state, runtime_root, request):
                 or request.get('expected_quantity') is None):
             raise Rejected('DELETE_SCOPE_INVALID', 'Section path and exact displayed quantity required')
         request['expected_quantity'] = normalize_quantity(request['expected_quantity'], allow_zero=True)
+        if 'path' in request and not re.fullmatch(r'(?:/\d+){3,12}', request['path']):
+            raise Rejected('DELETE_SCOPE_INVALID', 'Use a reviewed native-inspect quota row path')
         note = request.get('expected_note', '')
         if len(note) > 2048 or any(ord(char) < 32 and char not in '\n\r\t' for char in note):
             raise Rejected('TARGET_IDENTITY_INVALID', 'Expected remark exceeds the supported size or characters')
@@ -220,6 +223,7 @@ def delete_quota(state, runtime_root, request):
                     return confirm_permanent(store, ctx, bridge, before, after, intent, result)
                 return finish_delete(store, ctx, result, before, after, dispatch)
             except (ValueError, OSError, RuntimeError) as exc:
+                result.update(ipc_records=bridge.records)
                 stop_delete(store, result, exc)
     finally:
         store.close()
@@ -247,7 +251,7 @@ def finish_delete(store, ctx, result, before, after, dispatch):
     result.update(evidence_id=proof, modals=after['modals'], target_after=after.get('target'))
     if after['modals']:
         raise ValueError('An unresolved dialog remains after deletion')
-    if (result['mode'] == 'temporary' and after.get('target_matches') == 1
+    if (after.get('target_matches') == 1
             and after.get('target') == before['target']
             and table(after, '工程量表达式')['rows'] == table(before, '工程量表达式')['rows']):
         result.pop('error', None)
@@ -381,6 +385,10 @@ def reconcile_pending_delete(state, command_id):
             raise Rejected('RECONCILIATION_NOT_AVAILABLE', 'A recorded deletion is required')
         if row['phase'] == 'readback_verified':
             return {**result, 'idempotent_reentry': True, 'receipt_only': True, 'new_business_dispatches': 0}
+        if row['phase'] == 'no_dispatch_verified':
+            return {**result, 'receipt_only': True, 'new_business_dispatches': 0}
+        if row['phase'] == 'armed_unknown' and not result.get('evidence_id'):
+            return reconcile_blocked_delete(store, row, result)
         if not result.get('evidence_id') or result.get('business_dispatches') != 1:
             raise Rejected('RECONCILIATION_NOT_AVAILABLE', 'Original dispatch and dialog evidence required')
         project = store.db.execute('SELECT * FROM projects WHERE project_id=?', (row['project_id'],)).fetchone()
@@ -394,7 +402,11 @@ def reconcile_pending_delete(state, command_id):
             manager = SessionManager(store, WindowsDesktop(), RuntimeProfile.load(profile))
             request, before, recorded, dispatch, _ = pending_delete_evidence(store, row, ctx, result)
             if result['mode'] == 'permanent':
-                require_confirmation(before, recorded)
+                if recorded['modals']:
+                    require_confirmation(before, recorded)
+                elif (result.get('confirmation_armed') or recorded.get('target') != before['target']
+                        or table(recorded, '工程量表达式')['rows'] != table(before, '工程量表达式')['rows']):
+                    raise Rejected('DELETE_EVIDENCE_MISMATCH', 'The original no-effect deletion readback is required')
                 bridge = load_bridge(result['runtime'])
             else:
                 directory = Path(result['runtime']).parents[2] / ('drec-' + uuid.uuid4().hex[:12])
@@ -414,3 +426,52 @@ def reconcile_pending_delete(state, command_id):
             return finish_delete(store, ctx, result, before, after, dispatch)
     finally:
         store.close()
+
+
+def reconcile_blocked_delete(store, row, result):
+    """Close a deletion intent only when the native guard proved it stopped before queueing."""
+    project_id = row['project_id']
+    project = store.db.execute('SELECT * FROM projects WHERE project_id=?', (project_id,)).fetchone()
+    with execution_lock(store.root, project['file_id']):
+        current = store.db.execute('SELECT * FROM native_cli_commands WHERE command_id=?', (row['command_id'],)).fetchone()
+        if dict(current) != dict(row):
+            raise Rejected('COMMAND_CHANGED', 'Deletion state changed before reconciliation')
+        ctx = SessionContext(**json.loads(project['metadata'])['session'])
+        profile = profile_path(ctx.profile_id)
+        SessionManager(store, WindowsDesktop(), RuntimeProfile.load(profile)).validate_session(ctx)
+        pre = store.read_evidence(result['preflight_evidence_id'], project_id)
+        data = pre['data']
+        if (pre['kind'] != 'native_quota_delete_preflight' or pre['session_id'] != ctx.session_id
+                or digest(data['request']) != row['request_digest']):
+            raise Rejected('DELETE_EVIDENCE_MISMATCH', 'The original deletion preflight is required')
+        runtime = Path(result['runtime'])
+        paths = list((runtime / 'ipc').glob('*.result.json'))
+        dispatches = []
+        for path in paths:
+            record = json.loads(path.read_text(encoding='utf-8'))
+            if record['operation'] == 'quota.delete':
+                dispatches.append(record)
+        if len(dispatches) != 1:
+            raise Rejected('DELETE_EVIDENCE_MISMATCH', 'One original native deletion request is required')
+        dispatch = dispatches[0]
+        intent = dispatch['request']
+        receipt = dispatch.get('receipt') or {}
+        error = 'delete_single_selection_not_verified'
+        if (intent.get('outer_intent_id') != data['intent_id'] or intent.get('expected_target') != result['target']
+                or receipt.get('pid') != ctx.pid or receipt.get('created_filetime') != ctx.created_filetime
+                or receipt.get('status') != 'blocked' or receipt.get('error') != error
+                or result['error'] != 'Native request blocked: ' + error
+                or receipt.get('business_dispatches') != 0 or receipt.get('native_delete_queued')):
+            raise Rejected('DELETE_EVIDENCE_MISMATCH', 'The original native request did not prove a pre-dispatch stop')
+        bridge = load_bridge(runtime)
+        after = bridge.call('inspect', timeout=30)
+        if (after['pid'] != ctx.pid or after['created_filetime'] != ctx.created_filetime or after['modals']
+                or table(after, '工程量表达式')['rows'] != table(data['capture'], '工程量表达式')['rows']):
+            raise Rejected('DELETE_READBACK_CHANGED', 'The original budget must match before and after')
+        proof = store.put_evidence(project_id, ctx.session_id, 'native_delete_blocked_readback',
+            dict(capture=after, original=dispatch, preflight_evidence_id=result['preflight_evidence_id']))
+        result.update(status='native_delete_blocked_no_dispatch', evidence_id=proof,
+                      new_business_dispatches=0, business_dispatches=0, readonly_reconciled=True,
+                      ipc_records=list(dict.fromkeys([str(path) for path in paths] + bridge.records)))
+        save_result(store, result, 'no_dispatch_verified')
+        return result

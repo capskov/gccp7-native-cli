@@ -1,12 +1,92 @@
 #include <QMetaMethod>
+#include <QAbstractButton>
+#include <QLabel>
 #include <QTabBar>
+#include <QTextDocumentFragment>
+#include <QTreeView>
+
+static bool editProjectTreeName(const QJsonObject &req, const QJsonObject &target,
+                                QJsonObject &out, QString &error) {
+    const auto expected = target["project_name"].toString();
+    const auto unit = target["unit_name"].toString();
+    const auto value = target["value"].toString();
+    QAbstractItemModel *model = nullptr;
+    QTreeView *projectTree = nullptr;
+    QModelIndex item;
+    int matches = 0;
+    for (auto widget : QApplication::allWidgets()) {
+        auto tree = qobject_cast<QTreeView *>(widget);
+        if (!tree || !tree->isVisible() || !tree->model()) continue;
+        auto candidate = tree->model();
+        if (candidate->thread() != qApp->thread() || candidate->rowCount() > 30) continue;
+        for (int i = 0; i < candidate->rowCount(); ++i) {
+            auto index = candidate->index(i, 0);
+            if (index.data().toString() != expected || candidate->rowCount(index) == 0) continue;
+            if (unit.isEmpty()) {
+                model = candidate;
+                item = index;
+                ++matches;
+            } else {
+                for (int j = 0; j < candidate->rowCount(index); ++j) {
+                    auto child = candidate->index(j, 0, index);
+                    if (child.data().toString() != unit) continue;
+                    model = candidate;
+                    projectTree = tree;
+                    item = child;
+                    ++matches;
+                }
+            }
+        }
+    }
+    if (matches != 1) { error = "project_tree_target_not_unique"; return false; }
+    if (req["operation"].toString() == "material.select-unit") {
+        if (!projectTree || !(item.flags() & Qt::ItemIsEnabled) || !(item.flags() & Qt::ItemIsSelectable)) {
+            error = "project_unit_not_selectable"; return false;
+        }
+        projectTree->setCurrentIndex(item);
+        if (projectTree->currentIndex() != item || !QMetaObject::invokeMethod(
+                projectTree, "clicked", Qt::DirectConnection, Q_ARG(QModelIndex, item))) {
+            error = "project_unit_selection_not_verified"; return false;
+        }
+        out["application_selection_changed"] = true;
+        out["tree_name"] = unit;
+        return true;
+    }
+    for (int i = 0; i < model->rowCount(item.parent()); ++i) {
+        if (model->index(i, 0, item.parent()).data().toString() == value) {
+            error = "project_tree_name_already_exists"; return false;
+        }
+    }
+    out["editable"] = bool(item.flags() & Qt::ItemIsEditable);
+    if (!out["editable"].toBool()) { error = "project_tree_name_not_editable"; return false; }
+    if (req["operation"].toString() == "material.check") return true;
+    if (req["operation"].toString() != "material.edit") { error = "operation_not_allowed"; return false; }
+    static bool dispatched = false;
+    if (dispatched || !prepareStage(req, "01-before-project-rename", error)) return false;
+    dispatched = true;
+    QPersistentModelIndex edited(item);
+    out["business_dispatches"] = 1;
+    out["setter_accepted"] = model->setData(item, value, Qt::EditRole);
+    out["tree_name"] = edited.data().toString();
+    if (!out["setter_accepted"].toBool() || out["tree_name"].toString() != value) {
+        error = "project_tree_rename_not_verified"; return false;
+    }
+    return true;
+}
+
 static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
     const auto op = req["operation"].toString();
     if (op == "inspect") return true;
-    if (op != "material.check" && op != "material.edit" && op != "material.focus") { error = "operation_not_allowed"; return false; }
-    if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
+    const bool cancelQuantity = op == "material.cancel-quantity";
+    if (op != "material.check" && op != "material.edit" && op != "material.focus"
+            && op != "material.select-unit" && !cancelQuantity) {
+        error = "operation_not_allowed"; return false;
+    }
+    if ((!cancelQuantity && QApplication::activeModalWidget()) || QApplication::activePopupWidget()) {
         error = "dialog_or_popup_active"; return false;
     }
+    const auto target = req["expected_target"].toObject();
+    if (target.contains("project_name")) return editProjectTreeName(req, target, out, error);
     auto module = GetModuleHandleW(L"GLDTableView.dll");
     auto getter = reinterpret_cast<QAbstractItemModel* (__fastcall *)(const void*)>(
         GetProcAddress(module, "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
@@ -30,7 +110,6 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         }
     }
     if (count != 1) { error = "budget_not_unique"; return false; }
-    const auto target = req["expected_target"].toObject();
     const int col = target["column"].toInt(-1);
     if (col == 6) {
         auto getter = GetProcAddress(module, "?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
@@ -71,11 +150,83 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         return true;
     }
     if (!row.isValid() || (col != 6 && !row.parent().isValid())) { error = "invalid_material_row"; return false; }
-    if (col != 2 && col != 4 && col != 5 && col != 6) { error = "invalid_edit_column"; return false; }
+    if (col != 2 && col != 4 && col != 5 && col != 6 && col != 12) { error = "invalid_edit_column"; return false; }
+    if (target.contains("concrete_grade")) {
+        auto currentGetter = GetProcAddress(module, "?currentIndex@GlodonAbstractItemView@@QEBA?AVQModelIndex@@XZ");
+        const auto current = currentGetter
+            ? readPinnedCurrentIndex(budgetView, reinterpret_cast<const void *>(currentGetter)) : QModelIndex();
+        if (current.sibling(current.row(), 0) != row
+                || currentIndexEvidence(model, row)["values"] != target["material"]
+                || op != "material.check") {
+            error = "concrete_owner_not_current"; return false;
+        }
+        QModelIndex cell;
+        int matches = 0;
+        const auto code = target["concrete_code"].toString();
+        const auto grade = target["concrete_grade"].toString();
+        for (auto widget : QApplication::allWidgets()) {
+            if (!widget->isVisible() || !widget->inherits("GBQStdConvTableView")) continue;
+            auto view = widget->qt_metacast("GlodonAbstractItemView");
+            auto conversion = view ? getter(view) : nullptr;
+            if (!conversion || !conversion->inherits("GBQStdConvModel") || conversion->columnCount() != 3
+                    || conversion->headerData(2, Qt::Horizontal).toString() != "换算内容"
+                    || conversion->rowCount() > 32) continue;
+            for (int i = 0; i < conversion->rowCount(); ++i) {
+                auto entry = conversion->index(i, 2);
+                if (!entry.data().toString().startsWith(code + "  ")
+                        || !entry.data().toString().endsWith(" " + grade)) continue;
+                cell = entry;
+                ++matches;
+            }
+        }
+        if (matches != 1) { error = "concrete_conversion_rule_not_unique"; return false; }
+        out["editable"] = bool(cell.flags() & Qt::ItemIsEditable);
+        if (!out["editable"].toBool() || cell.data(Qt::EditRole).type() != QVariant::String) {
+            error = "concrete_conversion_cell_not_editable"; return false;
+        }
+        QJsonArray roles;
+        for (int role : {int(Qt::DisplayRole), int(Qt::EditRole), int(Qt::UserRole), int(Qt::UserRole) + 1}) {
+            auto data = cell.data(role);
+            roles.append(QJsonObject{{"role", role}, {"type", QString::fromLatin1(data.typeName() ? data.typeName() : "")},
+                {"value", QJsonValue::fromVariant(data)}});
+        }
+        out["conversion"] = roles;
+        return true;
+    }
+    const auto expectedKind = target["material"].toArray().at(1).toString();
+    QString editKind = "主";
+    if (col == 2 && expectedKind == "部") editKind = "部";
+    if (col == 4 || col == 12 || (col == 2 && expectedKind == "定")) editKind = "定";
+    if ((col == 2 || col == 12) && expectedKind == "换") editKind = "换";
     if (currentIndexEvidence(model, row)["values"] != target["material"]
             || (col != 6 && (currentIndexEvidence(model, row.parent())["values"] != target["quota"]
-            || row.sibling(row.row(), 1).data().toString() != (col == 4 ? "定" : "主")))) {
+            || row.sibling(row.row(), 1).data().toString() != editKind))) {
         error = "edit_identity_changed"; return false;
+    }
+    if (cancelQuantity) {
+        auto modal = QApplication::activeModalWidget();
+        if (col != 4 || !modal || QString(modal->metaObject()->className()) != "GCCPMessageBox"
+                || modal->windowTitle() != "确认") {
+            error = "quantity_detail_confirmation_not_verified"; return false;
+        }
+        int prompts = 0, yes = 0, no = 0;
+        QAbstractButton *cancel = nullptr;
+        for (auto label : modal->findChildren<QLabel *>()) {
+            const auto plain = QTextDocumentFragment::fromHtml(label->text()).toPlainText().simplified().remove(' ');
+            if (label->isVisible() && plain == "您已经编辑过工程量明细表，修改工程量表达式将清空明细表，是否继续？")
+                ++prompts;
+        }
+        for (auto button : modal->findChildren<QAbstractButton *>()) {
+            if (!button->isVisible() || !button->isEnabled()) continue;
+            if (button->text() == "是") ++yes;
+            if (button->text() == "否") { ++no; cancel = button; }
+        }
+        if (prompts != 1 || yes != 1 || no != 1) {
+            error = "quantity_detail_confirmation_buttons_or_text_changed"; return false;
+        }
+        cancel->click();
+        out["quantity_detail_cancelled"] = true;
+        return true;
     }
     auto cell = row.sibling(row.row(), col);
     out["editable"] = bool(cell.flags() & Qt::ItemIsEditable);

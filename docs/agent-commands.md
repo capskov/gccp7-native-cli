@@ -17,14 +17,21 @@
 | 补充零价子目 | `gccp quota-supplement` | 整个项目视图、选中目标分部内的直接子目，或用 `--navigate-anchor` | 打开原生表单、填写并提交一条补充子目，回读整份预算，无保存派发 |
 | 短距离顶进换算 | `gccp quota-short-drive-factor` | 整个项目视图、准确选中 `11-34`、标准换算页、工程量至多 60 m | 勾选内置人工及机械系数 1.15，检查主材与整份预算，无保存派发 |
 | 调价后刷新绑定 | `gccp bind --refresh-from-inspector ... --accept-price-updates` | 原进程和账本、操作者确认调价、整个项目视图、新保存文件的 SHA-256 | 核对同一预算，接受价格字段变化，保留新观察器 |
-| 删除一条预算行 | `gccp quota-delete` | 精确父项、完整名称、编号、单位和模式 | 分部路径模式还需 `--expected-quantity`，可用 `--expected-note` 区分同量行，`--kind 换\|补` 指定类别，`--navigate-target` 请求原生定位 |
+| 删除一条预算行 | `gccp quota-delete` | 精确父项、完整名称、编号、单位和模式 | 分部路径模式还需 `--expected-quantity`，可用 `--expected-note`、`--path` 区分同量行，`--kind` 指定类别，`--navigate-target` 请求原生定位 |
 | 删除空分部 | `gccp section-delete` | 完整分部路径、唯一命令号、目标无子行 | 原生定位并移除空分部，读回层级和其余预算行 |
+| 修改预算分部名称 | `gccp section-rename` | `native-inspect` 回读的分部行路径、原名称、新名称、唯一命令号 | 支持 `--check-only`。正式执行后核对目标名称和整棵预算树，保留待保存状态 |
+| 修改工程名称 | `gccp project-rename` | 当前工程树中的完整原名称、新名称、唯一命令号 | 支持 `--check-only`。正式执行后核对工程树名称和当前预算，使用 `project-save` 保存到原路径 |
+| 修改单位工程名称 | `gccp unit-rename` | 工程树的完整项目名称、当前单位工程名称、新名称、唯一命令号 | 支持 `--check-only`，核对单位工程名称和当前预算 |
+| 切换单位工程预算 | `gccp unit-select` | 完整项目名称、单位工程名称和该预算内已知的一个顶层分部名称 | 切换后核对目标分部，业务写入为零 |
+| 取消改量清空明细提示 | `gccp quota-quantity-cancel` | 原待核对的改量命令号和对应的广联达提示 | 只按提示中的“否”，回读原预算后关闭待核对状态 |
 | 修改已有定额工程量 | `gccp quota-quantity` | 已绑定工程、行路径、编码、名称、单位、备注、原表达式、新工程量和命令号 | 修改表达式，读回工程量及其余预算行，可加 `--check-only`，无需保存 |
 | 保存当前工程 | `gccp project-save` | 已绑定、已完成预算复核、无未决命令，原生保存动作唯一可用 | 派发一次保存，核对原路径文件 SHA-256、CRC 和同进程预算，可先加 `--check-only` |
 | 查执行结果 | `gccp command-status` | 原账本和原 command_id | 读本地回执 |
 | 查已套定额的工料机 | `gccp command-status --include-resources` | 同一命令的完整工料机回执 | 读历史明细，无现场操作 |
 | 续接永久删除确认 | `gccp quota-delete-confirm` | 原待确认命令和匹配的原生确认框 | 只继续原确认步骤 |
 | 核对待定结果 | `gccp command-reconcile` 或 `quota-delete-reconcile` | 原命令、原证据及当前匹配的工程 | 只读核对，记录账本结果 |
+
+连续同口径、同工艺的管件默认先核一条，再优先用 `quota-clone --variants` 复制并填写各自主材和数量。按 [定额复用](quota-reuse.md) 核对源行、安装工艺和工料机。
 
 安装及可复制示例见 [README](../README.md)。具体参数以对应命令的 `--help` 为准。首次调用先读版本范围，传入操作者授权的工程，避免用演示 ID 直接下单。
 
@@ -38,7 +45,9 @@
 
 通用入口接受北京 2025 库中的精确现场候选，包括其他专业和单位。`--parent-id` 定位有业务 ID 的非空顶层分部。二级分部可用逐级重复的 `--parent-section` 配合 `--selected-anchor`，自动采用 `--no-save`。同一父项下每一级名称须唯一，目标分部须已有直接定额行。当前行应是末条定额，或紧邻自动生成空白尾行的上一条定额。旧的分部路径运行包不能用于写入。
 
-同一分部内，新增构件与原行的计量边界独立但共用定额时，可传入 `--item-label` 将用途写进新增行名称。先核对现有行和工程量，再填写独立用途。无用途的新增和同用途的重复新增会被阻止。
+新增定额保留原厂名称。`quota-run` 把与命令号对应的 `[CLI:xxxxxxxx]` 追踪码写入备注，用于读回定位和防重复。确有独立计量用途时，用 `--item-label` 将用途一并写入备注。同一分部的同用途重复新增会被阻止，已有旧格式的用途也会参与检查。
+
+图纸给出管件、阀门等主材名称或型号时，首套后用 `material-edit --field name` 完善主材，复用时用 `quota-clone --material-name` 或 `--variants` 填实际名称及规格。现有流程通过名称更名时可写成“球墨铸铁全盘三通 DN250×100”。验收时读回每条主材的名称、型号及数量，供询价使用。
 
 原厂库无适用子目时，先切到预算书的“整个项目”，选中目标分部的直接子目。用 `quota-supplement` 传入 `--state`、`--runtime-root`、绑定返回的 `--inspector` 和 `--project-id`、逐级 `--parent-section`、唯一 `--command-id` 及 `--code`、`--name`、`--unit`、`--quantity`。编号用 `补` 加字母、数字或连字符。命令通过广联达原生动作打开表单，也兼容已经打开的空白表单。提交后核对目标分部、数量、价格以及其余预算行。加 `--check-only` 可打开、填写、校验并取消，回读确认预算一致。意外退出时先查 `command-status` 和原工程，待定补项需人工核对原回执。
 
