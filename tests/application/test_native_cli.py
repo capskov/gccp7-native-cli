@@ -62,6 +62,34 @@ class NativeCliTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in bridge.call.call_args_list],
                          ['inspect', 'supplement.open', 'inspect', 'inspect'])
 
+    def test_replaced_workcopy_reports_rebind_without_retry(self):
+        from gccp_foundation.domain.errors import FoundationError
+        from gccp_foundation.execution.session import SessionManager
+
+        ledger = Mock()
+        ledger.db.execute.return_value.fetchone.return_value = {
+            'file_id': 'volume:old', 'metadata': json.dumps(
+                dict(workcopy_path=str(self.root / 'sample.GPB7'), owned_workcopy=True))
+        }
+        with patch('gccp_foundation.execution.session.file_identity', return_value='volume:new'):
+            with self.assertRaises(FoundationError) as blocked:
+                SessionManager(ledger, None, None)._project('project.test')
+        error = blocked.exception.detail.to_dict()
+        self.assertEqual(error['code'], 'WORKCOPY_FILE_REPLACED')
+        self.assertEqual(error['recovery'], 'rebind')
+        self.assertFalse(error['retry_allowed'])
+
+    def test_query_wait_only_observes_until_control_is_ready(self):
+        from gccp_foundation.application.native_lookup import wait_for_query
+
+        bridge = Mock()
+        ready = dict(query_search_ready=True)
+        bridge.call.side_effect = [dict(query_search_ready=False), ready]
+        with patch('gccp_foundation.application.native_lookup.time.sleep'):
+            result = wait_for_query(bridge, lambda s: s['query_search_ready'], 'TEST', 'Not ready')
+        self.assertEqual(result, ready)
+        self.assertEqual([call.args[0] for call in bridge.call.call_args_list], ['probe', 'probe'])
+
     def test_price_rebind_rejects_quantity_and_conversion_changes(self):
         headers = ['编码', '类别', '工程量', '单价', '合价', '全费合价', '单位指标']
         before = dict(headers=headers, rows=[dict(row_path_session_only='/0', depth=0,

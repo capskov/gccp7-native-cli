@@ -25,6 +25,7 @@
 | 切换单位工程预算 | `gccp unit-select` | 完整项目名称、单位工程名称和该预算内已知的一个顶层分部名称 | 切换后核对目标分部，业务写入为零 |
 | 取消改量清空明细提示 | `gccp quota-quantity-cancel` | 原待核对的改量命令号和对应的广联达提示 | 只按提示中的“否”，回读原预算后关闭待核对状态 |
 | 修改已有定额工程量 | `gccp quota-quantity` | 已绑定工程、行路径、编码、名称、单位、备注、原表达式、新工程量和命令号 | 修改表达式，读回工程量及其余预算行，可加 `--check-only`，无需保存 |
+| 核对或关闭原生查询窗 | `gccp quota-candidates --query-status`、`--close-query` | 原工程绑定 | 核对唯一查询窗，关闭后校验预算不变 |
 | 保存当前工程 | `gccp project-save` | 已绑定、已完成预算复核、无未决命令，原生保存动作唯一可用 | 派发一次保存，核对原路径文件 SHA-256、CRC 和同进程预算，可先加 `--check-only` |
 | 查执行结果 | `gccp command-status` | 原账本和原 command_id | 读本地回执 |
 | 查已套定额的工料机 | `gccp command-status --include-resources` | 同一命令的完整工料机回执 | 读历史明细，无现场操作 |

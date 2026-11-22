@@ -9,7 +9,7 @@ import time
 import uuid
 
 from gccp_foundation.application.ports import SessionContext
-from gccp_foundation.domain.errors import ErrorCategory, ErrorDetail, FoundationError
+from gccp_foundation.domain.errors import ErrorCategory, ErrorDetail, FoundationError, Recovery
 from gccp_foundation.domain.json_values import loads
 from gccp_foundation.execution.profiles import file_sha256
 from gccp_foundation.adapters.native_windows.desktop import await_condition
@@ -67,8 +67,12 @@ class SessionManager:
             raise error("PROJECT_IDENTITY_MISMATCH", "Unknown managed project")
         metadata = loads(row["metadata"])
         path = Path(metadata["workcopy_path"])
-        if not metadata.get("owned_workcopy") or file_identity(path) != row["file_id"]:
-            raise error("PROJECT_IDENTITY_MISMATCH", "Workcopy ownership or file identity changed")
+        if not metadata.get("owned_workcopy"):
+            raise error("PROJECT_IDENTITY_MISMATCH", "Workcopy ownership changed")
+        if file_identity(path) != row["file_id"]:
+            raise FoundationError(ErrorDetail('WORKCOPY_FILE_REPLACED', ErrorCategory.BINDING,
+                'The workcopy file was replaced. Check the original command status before refreshing the binding.',
+                recovery=Recovery.REBIND))
         if metadata.get('provenance') == 'explicit_user_selected_open_workcopy':
             if not metadata.get('keep_open') or not metadata.get('initial_sha256') or metadata.get('source_path') is not None:
                 raise error('PROJECT_IDENTITY_MISMATCH', 'Invalid open-workcopy registration')

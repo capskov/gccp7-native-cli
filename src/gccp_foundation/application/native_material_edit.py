@@ -263,23 +263,35 @@ def edit_material(state, runtime_root, request, *, check_only=False):
                 raise Rejected('NEEDS_RECONCILIATION', 'Read back the original material edit before any retry') from exc
 
 
-def select_project_unit(state, runtime_root, project_id, project_name, unit_name, expected_section):
+def select_project_unit(state, runtime_root, project_id, project_name, unit_name, expected_section,
+                        *, reviewed_file_sha256=None):
     """Select the exact project tree child and verify that its budget is active."""
     if not all(name.strip() for name in (project_name, unit_name, expected_section)):
         raise Rejected('PROJECT_UNIT_INVALID', 'Provide the exact project, unit, and one known budget section')
+    if reviewed_file_sha256 is not None:
+        if not re.fullmatch(r'[0-9a-fA-F]{64}', reviewed_file_sha256):
+            raise Rejected('DISK_DIGEST_INVALID', 'Provide the current reviewed workcopy SHA-256')
+        reviewed_file_sha256 = reviewed_file_sha256.lower()
     with closing(Ledger(state)) as store:
         initialize_commands(store)
         project = store.db.execute('SELECT * FROM projects WHERE project_id=?', (project_id,)).fetchone()
         if project is None:
             raise Rejected('PROJECT_NOT_BOUND', 'Bind the current project first')
         with execution_lock(store.root, project['file_id']):
-            ctx = SessionContext(**json.loads(project['metadata'])['session'])
+            meta = json.loads(project['metadata'])
+            if not meta.get('session'):
+                raise Rejected('PROJECT_NOT_BOUND', 'Bind the current project first')
+            ctx = SessionContext(**meta['session'])
             profile = profile_path(ctx.profile_id)
-            meta = SessionManager(store, WindowsDesktop(), RuntimeProfile.load(profile)).validate_session(ctx)
+            manager = SessionManager(store, WindowsDesktop(), RuntimeProfile.load(profile))
             if (meta.get('dirty') or store.load_pending(project_id) or NativeSaveAttempts(store).active(project_id)
                     or store.db.execute("SELECT 1 FROM native_cli_commands WHERE project_id=? AND phase='armed_unknown'",
                                         (project_id,)).fetchone()):
                 raise Rejected('PROJECT_NEEDS_RECONCILIATION', 'Resolve the pending command before changing views')
+            if reviewed_file_sha256 is None:
+                meta = manager.validate_session(ctx)
+            else:
+                previous = manager.inspect_saved_open_identity(ctx, reviewed_file_sha256)
             command = 'unit-select-' + uuid.uuid4().hex
             directory = Path(runtime_root).resolve() / 'material-edit' / command
             bridge = build_material_bridge(directory, command, meta, profile)
@@ -293,6 +305,9 @@ def select_project_unit(state, runtime_root, project_id, project_name, unit_name
                     or str(snapshot['created_filetime']) != str(ctx.created_filetime)
                     or snapshot['pid'] != ctx.pid or sections.count(expected_section) != 1):
                 raise Rejected('PROJECT_UNIT_VIEW_NOT_VERIFIED', 'The selected unit budget did not show its expected section')
+            if (reviewed_file_sha256 is not None
+                    and manager.inspect_saved_open_identity(ctx, reviewed_file_sha256) != previous):
+                raise Rejected('PROJECT_IDENTITY_MISMATCH', 'The reviewed file changed while selecting the unit view')
             return dict(status='native_unit_view_verified', unit_name=unit_name, sections=sections,
                         business_dispatches=0, ipc_records=bridge.records)
 

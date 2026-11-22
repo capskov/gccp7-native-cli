@@ -9,9 +9,40 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         error = "query_blocked_by_dialog"; return false;
     }
     QList<QWidget*> queries;
-    for (auto w : QApplication::allWidgets())
-        if (w->isVisible() && w->inherits("GBQNormDBQueryFrame")) queries.append(w);
+    QSet<QWidget*> queryWindows;
+    QJsonArray visibleControls;
+    for (auto w : QApplication::allWidgets()) {
+        if (w->isVisible() && (w->inherits("GBQNormDBQueryFrame") || w->inherits("GBQResourceQueryFrame"))) {
+            queries.append(w);
+            queryWindows.insert(w->window());
+        }
+        if (w->isVisible() && visibleControls.size() < 24 &&
+                (w->inherits("GLDHintLineEdit") || w->inherits("GBQNormDBComboBox")
+                 || (qobject_cast<QAbstractButton*>(w) && w->objectName().contains("Query", Qt::CaseInsensitive)))) {
+            QJsonArray ancestors;
+            for (auto p = w; p && ancestors.size() < 9; p = p->parentWidget())
+                ancestors.append(QJsonObject{{"class",p->metaObject()->className()},{"name",p->objectName()}});
+            visibleControls.append(ancestors);
+        }
+    }
     if (op == "open") {
+        using ModelGetter = QAbstractItemModel* (__fastcall *)(const void*);
+        auto modelFor = reinterpret_cast<ModelGetter>(GetProcAddress(
+            GetModuleHandleW(L"GLDTableView.dll"), "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
+        if (!modelFor) { error = "query_budget_getter_missing"; return false; }
+        QSet<QAbstractItemModel*> budgets;
+        QWidget *budget = nullptr;
+        for (auto widget : QApplication::allWidgets()) {
+            if (!widget->isVisible()) continue;
+            auto view = widget->qt_metacast("GlodonAbstractItemView");
+            auto model = view ? modelFor(view) : nullptr;
+            if (model && model->thread() == qApp->thread() && model->columnCount() == 13
+                    && model->headerData(4, Qt::Horizontal).toString() == "工程量表达式"
+                    && !budgets.contains(model)) {
+                budgets.insert(model);
+                budget = widget;
+            }
+        }
         QSet<QAction*> actions;
         for (auto w : QApplication::allWidgets())
             for (auto a : w->actions()) actions.insert(a);
@@ -21,34 +52,53 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
         for (auto a : actions)
             if (a->thread() == qApp->thread() && a->isEnabled() && a->objectName() == "BQ_QueryOfPopMenu"
                 && a->text() == "查询" && a->shortcut().toString() == "F3") matches.append(a);
-        if (!queries.isEmpty() || matches.size() != 1) { error = "query_context_not_unique"; return false; }
+        out["query_action_count"] = matches.size();
+        out["query_budget_count"] = budgets.size();
+        if (!queries.isEmpty() || matches.size() != 1 || budgets.size() != 1 || !budget) {
+            error = "query_context_not_unique"; return false;
+        }
+        budget->setFocus(Qt::OtherFocusReason);
         matches[0]->trigger();
         return true;
     }
-    if (queries.size() != 1) { error = "query_not_unique"; return false; }
-    auto query = queries[0];
+    QSet<QLineEdit*> edits;
+    QList<QAbstractButton*> buttons;
+    QList<QComboBox*> libraries;
+    if (queryWindows.size() == 1) {
+        auto window = *queryWindows.begin();
+        for (auto query : queries) {
+            if (!query->inherits("GBQNormDBQueryFrame")) continue;
+            for (auto e : query->findChildren<QLineEdit*>())
+                if (e->isVisible() && e->inherits("GLDHintLineEdit")) edits.insert(e);
+        }
+        for (auto button : window->findChildren<QAbstractButton*>("m_pQueryClose"))
+            if (button->isVisible() && button->isEnabled()) buttons.append(button);
+        for (auto combo : window->findChildren<QComboBox*>())
+            if (combo->isVisible() && combo->inherits("GBQNormDBComboBox")) libraries.append(combo);
+    }
+    const bool reviewedLibrary = libraries.size() == 1
+        && libraries[0]->currentText() == "北京市建设工程概算消耗量标准(2025)";
+    out["query_windows"] = queryWindows.size();
+    out["query_frames"] = queries.size();
+    out["query_close_ready"] = buttons.size() == 1;
+    out["query_search_ready"] = edits.size() == 1 && reviewedLibrary;
+    out["query_controls"] = visibleControls;
+    if (op == "probe") return true;
+    if (queryWindows.size() != 1) { error = "query_not_unique"; return false; }
     if (op == "close") {
-        auto buttons = query->window()->findChildren<QAbstractButton*>("m_pQueryClose");
-        if (buttons.size() != 1 || !buttons[0]->isVisible() || !buttons[0]->isEnabled()) {
+        if (buttons.size() != 1) {
             error = "query_close_not_unique"; return false;
         }
         buttons[0]->click();
         return true;
     }
-    QList<QComboBox*> libraries;
-    for (auto w : QApplication::allWidgets())
-        if (w->isVisible() && w->inherits("GBQNormDBComboBox"))
-            if (auto c = qobject_cast<QComboBox*>(w)) libraries.append(c);
-    if (libraries.size() != 1 || libraries[0]->currentText() != "北京市建设工程概算消耗量标准(2025)") {
+    if (!reviewedLibrary) {
         error = "library_mismatch"; return false;
     }
     out["candidate_library"] = libraries[0]->currentText();
     if (op == "inspect") return true;
     if (op != "search") { error = "operation_not_allowed"; return false; }
-    QList<QLineEdit*> edits;
-    for (auto e : query->findChildren<QLineEdit*>())
-        if (e->isVisible() && e->inherits("GLDHintLineEdit")) edits.append(e);
     if (edits.size() != 1) { error = "search_editor_not_unique"; return false; }
-    edits[0]->setText(QStringLiteral(__LOOKUP_CODE__));
+    (*edits.begin())->setText(QStringLiteral(__LOOKUP_CODE__));
     return true;
 }

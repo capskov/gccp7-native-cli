@@ -5,7 +5,7 @@
 **GCCP7 Native CLI** provides native quota lookup, insertion with initial quantity, supplemental items, deletion and audited readback for Glodon GCCP7.
 
 - **Agent 入口**：[命令地图](docs/agent-commands.md) · [主技能](.agents/skills/gccp7-native-cli/SKILL.md) · [llms.txt](llms.txt)
-- **当前版本** `0.2.0b8`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
+- **当前版本** `0.2.0b9`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
 
 | 入口 | 当前范围 |
 | --- | --- |

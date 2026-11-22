@@ -291,7 +291,11 @@ static bool nativeOperation(const QJsonObject &req,QJsonObject &out,QString &err
     auto current=readPinnedCurrentIndex(bv,reinterpret_cast<const void*>(cg));
     if(current.sibling(current.row(),0)!=target || !targetValues[0].toString().isEmpty()){
         error="blank_budget_context_changed";return false;}
-    if(op=="open"){if(nq || qa!=1){error="query_action_not_unique";return false;}queryAction->trigger();return true;}
+    if(op=="open"){
+        if(nq || qa!=1){error="query_action_not_unique";return false;}
+        budget->setFocus(Qt::OtherFocusReason);
+        queryAction->trigger();return true;
+    }
     if(nq!=1){error="query_not_visible";return false;}int libs=0;QString library;
     for(auto w:QApplication::allWidgets())if(w->isVisible() && w->inherits("GBQNormDBComboBox"))if(auto c=qobject_cast<QComboBox*>(w)){library=c->currentText();++libs;}
     if(libs!=1 || library!="北京市建设工程概算消耗量标准(2025)"){error="library_mismatch";return false;}

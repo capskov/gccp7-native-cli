@@ -16,6 +16,7 @@ from gccp_foundation.storage import Ledger
 from gccp_foundation.storage.ledger import encoded
 from gccp_foundation.storage.native_save_attempts import NativeSaveAttempts
 from gccp_foundation import __version__
+from gccp_foundation.domain.errors import FoundationError
 
 
 class Rejected(ValueError):
@@ -620,6 +621,8 @@ def main(argv=None):
     identity.add_argument('--code')
     identity.add_argument('--vendor-id', type=int, help='Use an ID from the bundled Beijing 2025 export')
     identity.add_argument('--entry-id', type=int, help='Use a reviewed SQLite entry as the lookup starting point')
+    identity.add_argument('--query-status', action='store_true', help='Inspect the current native query window without writing')
+    identity.add_argument('--close-query', action='store_true', help='Close one verified native query window and verify the budget')
     candidates.add_argument('--db', type=Path)
     native = sub.add_parser('native-inspect'); native.add_argument('--runtime', required=True, type=Path)
     reuse = sub.add_parser('quota-reuse-plan', help='Compare reviewed material variants with a captured budget, without writing')
@@ -734,6 +737,7 @@ def main(argv=None):
         select_unit.add_argument('--' + flag, required=True, type=Path)
     for flag in ('project-id', 'project-name', 'unit-name', 'expected-section'):
         select_unit.add_argument('--' + flag, required=True)
+    select_unit.add_argument('--reviewed-file-sha256', help='Restore a read-only unit view after a reviewed file replacement')
     save = sub.add_parser('project-save', help='Save the bound open project once and verify the changed file')
     for flag in ('state', 'runtime-root'):
         save.add_argument('--' + flag, required=True, type=Path)
@@ -846,7 +850,10 @@ def main(argv=None):
                 finally:
                     catalog.close()
                 code = entry['code']
-            if vendor is not None:
+            if args.query_status or args.close_query:
+                data = lookup(args.state, args.runtime_root, args.project_id, None,
+                              query_action='status' if args.query_status else 'close')
+            elif vendor is not None:
                 data = lookup_vendor(args.state, args.runtime_root, args.project_id, vendor)
                 data['vendor_entry'] = vendor
                 data['matched_candidate'] = match_live_entry(vendor, data)
@@ -934,7 +941,8 @@ def main(argv=None):
         elif args.command == 'unit-select':
             from .native_material_edit import select_project_unit
             data = select_project_unit(args.state, args.runtime_root, args.project_id,
-                                       args.project_name, args.unit_name, args.expected_section)
+                                       args.project_name, args.unit_name, args.expected_section,
+                                       reviewed_file_sha256=args.reviewed_file_sha256)
         elif args.command == 'project-save':
             from .native_project_save import save_project
             data = save_project(args.state, args.runtime_root, args.project_id, args.command_id,
@@ -1020,9 +1028,10 @@ def main(argv=None):
         print(json.dumps(dict(schema='gccp.native-cli.v0.1', status='ok', data=data, error=None), ensure_ascii=False, indent=2))
         return 0
     except (ValueError, TypeError, KeyError, OSError, RuntimeError, sqlite3.Error, subprocess.SubprocessError) as exc:
+        detail = (exc.detail.to_dict() if isinstance(exc, FoundationError)
+                  else dict(code=getattr(exc, 'code', 'NATIVE_CLI_ERROR'), message=str(exc), retry_allowed=False))
         print(json.dumps(dict(schema='gccp.native-cli.v0.1', status='blocked', data=None,
-            error=dict(code=getattr(exc, 'code', 'NATIVE_CLI_ERROR'), message=str(exc),
-                       retry_allowed=False)), ensure_ascii=False, indent=2))
+            error=detail), ensure_ascii=False, indent=2))
         return 2
 
 

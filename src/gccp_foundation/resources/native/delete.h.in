@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QFont>
 #include <QLabel>
+#include <QMenu>
 #include <QTimer>
 
 static QJsonArray quotaValues(const QAbstractItemModel *model, const QModelIndex &row) {
@@ -17,7 +18,8 @@ static QJsonArray quotaValues(const QAbstractItemModel *model, const QModelIndex
 static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &error) {
     const auto op = req["operation"].toString();
     const bool confirm = op == "quota.delete.confirm";
-    if (op != "inspect" && !(op == "quota.delete" && !kConfirmOnly) && !(confirm && kAction == "Delete")) {
+    if (op != "inspect" && op != "dismiss.menu"
+            && !(op == "quota.delete" && !kConfirmOnly) && !(confirm && kAction == "Delete")) {
         error = "operation_not_allowed";
         return false;
     }
@@ -33,6 +35,16 @@ static bool nativeOperation(const QJsonObject &req, QJsonObject &out, QString &e
             {"title", window->windowTitle()}, {"labels", labels}, {"buttons", buttons}});
     }
     out["modals"] = modals;
+    auto popup = QApplication::activePopupWidget();
+    auto menu = qobject_cast<QMenu*>(popup);
+    out["menu_open"] = menu != nullptr;
+    if (op == "dismiss.menu") {
+        if (!modals.isEmpty() || !menu) {
+            error = "native_menu_not_verified"; return false;
+        }
+        out["menu_dismissed"] = menu->close();
+        return out["menu_dismissed"].toBool();
+    }
     if (op == "quota.delete" && (!modals.isEmpty() || QApplication::activePopupWidget())) {
         error = "modal_or_popup_blocks_delete";
         return false;

@@ -14,6 +14,10 @@
 
 如果已打开的工程仍在原进程，而 GPB7 在磁盘被替换，可用原账本和观察器调用 `gccp bind --refresh-from-inspector <原观察器> --expected-sha256 <当前文件指纹>`，同时传入常规绑定参数。命令校验文件 CRC、原进程和窗口、最新业务回执以及当前完整预算树。预算有变、存在未决动作或有待确认的保存时会停止。刷新只更新绑定并生成观察器。
 
+广联达自动保存可能替换磁盘文件。遇到 `WORKCOPY_FILE_REPLACED` 时，先用原命令号查 `command-status`。已有派发的操作按原回执核对，结果不明时保留原命令和账本。当前单位工程与最后一次核对的预算不同时，可用 `unit-select --reviewed-file-sha256 <当前文件指纹>` 恢复视图，再刷新绑定。这个参数只授权切换视图，仍需完成绑定刷新后才继续写入。
+
+定额查询残留时，用 `quota-candidates --query-status` 查看窗口和控件状态，再用 `quota-candidates --close-query` 关闭唯一可核实的查询面板。关闭后会核对原预算表。新查询有界等待原生控件就绪，遇到多个无法区分的窗口会停止。
+
 操作者更新单价并保存后，可在预算书“整个项目”视图加 `--accept-price-updates`。命令核对同一预算结构、子目、数量和换算标记，只允许金额字段变化。保留 `changed_price_rows`、新 `inspector` 及原账本。
 
 补充子目提交超时后，用 `command-status` 和当前只读预算核对原编号、分部、数量及对话框。当前这类待定结果需核对原回执，`command-reconcile` 的套项恢复流程与补充子目使用不同的证据。
@@ -28,4 +32,4 @@
 
 `DELETE_PREFLIGHT_TIMEOUT_NO_DISPATCH` 表示尚未登记删除意图，亦未派发。先等软件恢复响应，再核对当前工程文件身份及预算。
 `native_delete_no_effect_verified` 表示已核对删除后的目标及整表，均与原始快照一致。按新操作处理时先重新定位，已登记的原命令号只返回原回执。
-`native_delete_blocked_no_dispatch` 表示 `quota-delete-reconcile` 已核对原生选区保护回执与本次完整预算树，确认删除动作未排队。
+`native_delete_blocked_no_dispatch` 表示 `quota-delete-reconcile` 已核对原生选区或菜单拦截回执与完整预算树，确认删除未排队。删除预检可安全关闭普通弹出菜单，遇到模态对话框仍会停止。

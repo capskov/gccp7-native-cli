@@ -177,6 +177,14 @@ def delete_quota(state, runtime_root, request):
             budget = table(before, '工程量表达式')
             if before['modals']:
                 raise Rejected('DELETE_WINDOW_BLOCKED', 'A modal dialog is visible. Inspect it before deleting.')
+            if before.get('menu_open'):
+                dismissed = bridge.call('dismiss.menu', timeout=15)
+                before = bridge.call('inspect', timeout=30)
+                refreshed = table(before, '工程量表达式')
+                if (not dismissed.get('menu_dismissed') or before['modals'] or before.get('menu_open')
+                        or refreshed['rows'] != budget['rows']):
+                    raise Rejected('DELETE_MENU_DISMISS_NOT_VERIFIED', 'The budget must be unchanged after closing the menu')
+                budget = refreshed
             if before['target_matches'] != 1:
                 raise Rejected('DELETE_TARGET_NOT_UNIQUE', 'The exact quota must exist once under the requested budget parent')
             action, label = ACTIONS[mode]
@@ -436,9 +444,12 @@ def reconcile_blocked_delete(store, row, result):
         current = store.db.execute('SELECT * FROM native_cli_commands WHERE command_id=?', (row['command_id'],)).fetchone()
         if dict(current) != dict(row):
             raise Rejected('COMMAND_CHANGED', 'Deletion state changed before reconciliation')
-        ctx = SessionContext(**json.loads(project['metadata'])['session'])
+        meta = json.loads(project['metadata'])
+        ctx = SessionContext(**meta['session'])
         profile = profile_path(ctx.profile_id)
-        SessionManager(store, WindowsDesktop(), RuntimeProfile.load(profile)).validate_session(ctx)
+        manager = SessionManager(store, WindowsDesktop(), RuntimeProfile.load(profile))
+        file = Path(meta['workcopy_path'])
+        disk = manager.inspect_saved_open_identity(ctx, file_sha256(file))
         pre = store.read_evidence(result['preflight_evidence_id'], project_id)
         data = pre['data']
         if (pre['kind'] != 'native_quota_delete_preflight' or pre['session_id'] != ctx.session_id
@@ -456,22 +467,25 @@ def reconcile_blocked_delete(store, row, result):
         dispatch = dispatches[0]
         intent = dispatch['request']
         receipt = dispatch.get('receipt') or {}
-        error = 'delete_single_selection_not_verified'
+        error = receipt.get('error')
+        pre_dispatch_errors = {'delete_single_selection_not_verified', 'modal_or_popup_blocks_delete'}
         if (intent.get('outer_intent_id') != data['intent_id'] or intent.get('expected_target') != result['target']
                 or receipt.get('pid') != ctx.pid or receipt.get('created_filetime') != ctx.created_filetime
-                or receipt.get('status') != 'blocked' or receipt.get('error') != error
+                or receipt.get('status') != 'blocked' or error not in pre_dispatch_errors
                 or result['error'] != 'Native request blocked: ' + error
                 or receipt.get('business_dispatches') != 0 or receipt.get('native_delete_queued')):
             raise Rejected('DELETE_EVIDENCE_MISMATCH', 'The original native request did not prove a pre-dispatch stop')
         bridge = load_bridge(runtime)
         after = bridge.call('inspect', timeout=30)
         if (after['pid'] != ctx.pid or after['created_filetime'] != ctx.created_filetime or after['modals']
+                or manager.inspect_saved_open_identity(ctx, disk['sha256']) != disk
                 or table(after, '工程量表达式')['rows'] != table(data['capture'], '工程量表达式')['rows']):
             raise Rejected('DELETE_READBACK_CHANGED', 'The original budget must match before and after')
         proof = store.put_evidence(project_id, ctx.session_id, 'native_delete_blocked_readback',
             dict(capture=after, original=dispatch, preflight_evidence_id=result['preflight_evidence_id']))
         result.update(status='native_delete_blocked_no_dispatch', evidence_id=proof,
                       new_business_dispatches=0, business_dispatches=0, readonly_reconciled=True,
+                      observed_disk_identity=disk,
                       ipc_records=list(dict.fromkeys([str(path) for path in paths] + bridge.records)))
         save_result(store, result, 'no_dispatch_verified')
         return result
