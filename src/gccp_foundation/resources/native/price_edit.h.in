@@ -1,0 +1,129 @@
+#include <QTabBar>
+#include <QAbstractButton>
+#include <QLabel>
+#include <QTimer>
+
+static bool nativeOperation(const QJsonObject &request, QJsonObject &out, QString &error) {
+    const auto op = request["operation"].toString();
+    if (op == "inspect") return true;
+    const auto target = request["expected_target"].toObject();
+    if (op == "price.controls") {
+        QJsonArray controls;
+        auto describe = [&controls](QObject *obj, QString text, QString tip, bool enabled) {
+            controls.append(QJsonObject{{"text", text}, {"tip", tip}, {"class", obj->metaObject()->className()},
+                {"name", obj->objectName()}, {"enabled", enabled}});
+        };
+        QSet<QAction*> actions;
+        for (auto widget : QApplication::allWidgets()) {
+            if (!widget->isVisible()) continue;
+            if (auto tabs = qobject_cast<QTabBar*>(widget))
+                for (int i = 0; i < tabs->count(); ++i)
+                    describe(tabs, tabs->tabText(i), QString::number(tabs->currentIndex() == i), tabs->isTabEnabled(i));
+            const auto text = widget->property("text").toString();
+            if (!text.isEmpty() || !widget->toolTip().isEmpty())
+                describe(widget, text, widget->toolTip(), widget->isEnabled());
+            for (auto action : widget->findChildren<QAction*>(QString(), Qt::FindDirectChildrenOnly))
+                actions.insert(action);
+            for (auto action : widget->actions()) actions.insert(action);
+        }
+        for (auto action : actions)
+            if (action->isVisible()) describe(action, action->text(), action->toolTip(), action->isEnabled());
+        out["controls"] = controls;
+        if (auto modal = QApplication::activeModalWidget())
+            out["modal"] = modal->windowTitle();
+        return true;
+    }
+    if (op == "price.confirm") {
+        auto modal = QApplication::activeModalWidget();
+        auto label = modal ? modal->findChild<QLabel*>("m_pTipLabel") : nullptr;
+        auto yes = modal ? modal->findChild<QAbstractButton*>("YesButton") : nullptr;
+        if (!modal || modal->windowTitle() != "确认" || !label
+                || !label->text().contains("人材机数据有修改，是否应用？")
+                || !yes || yes->text() != "是" || !yes->isVisible() || !yes->isEnabled()) {
+            error = "price_confirmation_identity_changed"; return false;
+        }
+        if (!prepareStage(request, "01-before-price-confirmation", error)) return false;
+        out["business_dispatches"] = 1;
+        yes->click();
+        return true;
+    }
+    if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
+        error = "price_blocked_by_dialog"; return false;
+    }
+    if (op == "price.view") {
+        const QString label = target["view"].toString();
+        if (label != "人材机汇总" && label != "预算书" && label != "概算汇总") {
+            error = "price_view_not_supported"; return false;
+        }
+        QTabBar *bar = nullptr;
+        int slot = -1, matches = 0;
+        for (auto widget : QApplication::allWidgets()) {
+            auto tabs = qobject_cast<QTabBar*>(widget);
+            if (!tabs || !tabs->isVisible()) continue;
+            for (int i = 0; i < tabs->count(); ++i)
+                if (tabs->tabText(i) == label && tabs->isTabEnabled(i)) { bar = tabs; slot = i; ++matches; }
+        }
+        if (matches != 1) { error = "price_view_not_unique"; return false; }
+        if (target["deferred"].toBool()) {
+            QPointer<QTabBar> pinned(bar);
+            QTimer::singleShot(0, bar, [pinned, slot, label]() {
+                if (pinned && pinned->tabText(slot) == label && pinned->isTabEnabled(slot))
+                    pinned->setCurrentIndex(slot);
+            });
+        } else {
+            bar->setCurrentIndex(slot);
+        }
+        out["selected_view"] = label;
+        return true;
+    }
+    if (op != "price.check" && op != "price.select") {
+        error = "operation_not_allowed"; return false;
+    }
+    using Getter = QAbstractItemModel* (__fastcall *)(const void*);
+    auto getter = reinterpret_cast<Getter>(GetProcAddress(GetModuleHandleW(L"GLDTableView.dll"),
+        "?model@GlodonAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ"));
+    QSet<QAbstractItemModel*> models;
+    QWidget *summaryView = nullptr;
+    if (getter) for (auto widget : QApplication::allWidgets()) {
+        if (!widget->isVisible()) continue;
+        auto view = widget->qt_metacast("GlodonAbstractItemView");
+        auto model = view ? getter(view) : nullptr;
+        if (model && model->thread() == qApp->thread() && model->columnCount() == 18
+            && model->headerData(6, Qt::Horizontal).toString() == "市场价"
+            && model->headerData(8, Qt::Horizontal).toString() == "价格来源"
+            && model->headerData(9, Qt::Horizontal).toString() == "市场价锁定") {
+            models.insert(model);
+            if (widget->inherits("GTPGSPTableView")) summaryView = widget;
+        }
+    }
+    if (models.size() != 1) { error = "price_summary_not_unique"; return false; }
+    auto model = *models.begin();
+    if (model->rowCount() > 500) { error = "price_summary_row_limit"; return false; }
+    const auto expected = target["row"].toArray();
+    QModelIndex priceCell, sourceCell;
+    int matches = 0;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        QJsonArray values;
+        for (int col = 0; col < model->columnCount(); ++col) values.append(model->index(row, col).data().toString());
+        if (values != expected) continue;
+        priceCell = model->index(row, 6);
+        sourceCell = model->index(row, 8);
+        ++matches;
+    }
+    if (matches != 1 || expected.at(9) != "false" || (!target["replace"].toBool() && expected.at(6) != "0")) {
+        error = "price_target_changed"; return false;
+    }
+    out["price_editable"] = bool(priceCell.flags() & Qt::ItemIsEditable);
+    out["source_editable"] = bool(sourceCell.flags() & Qt::ItemIsEditable);
+    if (op == "price.check") return true;
+    if (op == "price.select") {
+        auto cell = priceCell.sibling(priceCell.row(), 0);
+        if (!summaryView || !QMetaObject::invokeMethod(summaryView, "setCurrentIndex", Qt::DirectConnection,
+                                                        Q_ARG(QModelIndex, cell))) {
+            error = "price_row_selection_not_available"; return false;
+        }
+        out["application_selection_changed"] = true;
+        return true;
+    }
+    return false;
+}

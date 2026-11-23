@@ -156,13 +156,20 @@ class SessionManager:
             from gccp_foundation.application.native_worker_support import table
 
             previous = self.ledger.read_evidence(proof['prior_artifact_id'], session.project_id)
+            previous_capture = previous['data']['capture']
+            if previous['kind'] == 'native_price_readback':
+                from gccp_foundation.application.native_price import indexed_summary
+
+                same_rows = indexed_summary(previous_capture) == indexed_summary(capture)
+            else:
+                same_rows = table(previous_capture, '工程量表达式')['rows'] == table(capture, '工程量表达式')['rows']
             unchanged = (
                 proof.get('disk_crc_verified') is True
                 and self.reviewed_baseline_reference(row) == (proof['prior_artifact_id'], previous['kind'])
                 and previous['session_id'] == session.session_id
                 and previous['data']['capture'].get('pid') == session.pid
                 and previous['data']['capture'].get('created_filetime') == session.created_filetime
-                and table(previous['data']['capture'], '工程量表达式')['rows'] == table(capture, '工程量表达式')['rows'])
+                and same_rows)
         if (not (user_review or unchanged) or evidence['session_id'] != session.session_id
                 or proof.get('session') != asdict(session)
                 or proof.get('disk_sha256') != expected_sha256
@@ -219,6 +226,9 @@ class SessionManager:
                 'native_material_edit_verified_not_saved': 'native_material_edit_readback',
                 'native_quota_quantity_verified_not_saved': 'native_material_edit_readback',
                 'native_project_save_verified': 'native_project_save_readback',
+                'native_price_verified_not_saved': 'native_price_readback',
+                'native_price_batch_verified_not_saved': 'native_price_readback',
+                'native_price_save_verified': 'native_price_readback',
             }.get(result.get('status'))
             if readback_kind and result.get('evidence_id'):
                 return result['evidence_id'], readback_kind

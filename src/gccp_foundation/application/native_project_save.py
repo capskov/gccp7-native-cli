@@ -18,11 +18,19 @@ from .ports import SessionContext
 from gccp_foundation.storage.native_save_attempts import NativeSaveAttempts
 
 
-def save_project(state, runtime_root, project_id, command_id, timeout, *, check_only=False):
+def save_project(state, runtime_root, project_id, command_id, timeout, *, check_only=False, price_summary=False):
     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', command_id):
         raise Rejected('IDENTIFIER_INVALID', 'Provide a bounded command ID')
     timeout = save_timeout_seconds(timeout)
-    signature = digest(dict(operation='project-save', project_id=project_id, command_id=command_id))
+    signature = digest(dict(operation='project-save', project_id=project_id, command_id=command_id,
+                            **({'price_summary': True} if price_summary else {})))
+    if price_summary:
+        from .native_price import indexed_summary
+
+    def snapshot(capture):
+        return indexed_summary(capture) if price_summary else table(capture, '工程量表达式')['rows']
+
+    count_key = 'summary_rows' if price_summary else 'budget_rows'
     with closing(Ledger(state)) as store:
         initialize_commands(store)
         project = store.db.execute('SELECT * FROM projects WHERE project_id=?', (project_id,)).fetchone()
@@ -53,10 +61,10 @@ def save_project(state, runtime_root, project_id, command_id, timeout, *, check_
             compile_bridge(directory)
             bridge = load_bridge(directory)
             before = bridge.call('inspect', timeout=25)
-            budget = table(before, '工程量表达式')
+            rows = snapshot(before)
             bridge.call('save.check', timeout=25)
             if check_only:
-                return dict(status='checked', save_dispatches=0, budget_rows=len(budget['rows']))
+                return dict(status='checked', save_dispatches=0, **{count_key: len(rows)})
             manager.validate_session(ctx)
             original_hash = file_sha256(path)
             intent = 'intent.' + uuid.uuid4().hex
@@ -76,13 +84,15 @@ def save_project(state, runtime_root, project_id, command_id, timeout, *, check_
                 save_result(store, result)
                 saved_hash = wait_for_saved_workcopy(path, original_hash, timeout=timeout)
                 after = bridge.call('inspect', timeout=30)
-                if table(after, '工程量表达式')['rows'] != budget['rows'] or file_sha256(path) != saved_hash:
+                if snapshot(after) != rows or file_sha256(path) != saved_hash:
                     raise ValueError('The saved file or open budget changed during verification')
                 manager.reconcile_open_native_save(ctx, saved_hash)
-                evidence = store.put_evidence(project_id, ctx.session_id, 'native_project_save_readback',
+                kind = 'native_price_readback' if price_summary else 'native_project_save_readback'
+                evidence = store.put_evidence(project_id, ctx.session_id, kind,
                     dict(capture=after, dispatch=dispatch, sha256=saved_hash, preflight_evidence_id=proof))
-                result.update(status='native_project_save_verified', path=str(path), sha256=saved_hash,
-                              budget_rows=len(budget['rows']), evidence_id=evidence, ipc_records=bridge.records)
+                status = 'native_price_save_verified' if price_summary else 'native_project_save_verified'
+                result.update(status=status, path=str(path), sha256=saved_hash,
+                              evidence_id=evidence, ipc_records=bridge.records, **{count_key: len(rows)})
                 save_result(store, result, 'readback_verified')
                 return result
             except (ValueError, OSError, RuntimeError) as exc:

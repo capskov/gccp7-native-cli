@@ -3,11 +3,13 @@ name: gccp7-native-cli
 description: 当用户说“用 CLI 操作”“原生桥”“中间桥”，或要求在当前广联达 GCCP7 概算中查定额、套定额、填量、补项、删项时，使用 Windows 本机 gccp 命令执行和核对。Use for Glodon GCCP7 estimate operations through its native CLI.
 ---
 
-# GCCP7 原生桥 CLI · 0.2.0b9
+# GCCP7 原生桥 CLI · 0.3.0
 
-首次加载时向用户说明本技能对应 GCCP7 原生桥 CLI 0.2.0b9，并用实际执行的 gccp --version 核对，出现版本差异时明确说明。
+首次加载时向用户说明本技能对应 GCCP7 原生桥 CLI 0.3.0，并用实际执行的 gccp --version 核对，出现版本差异时明确说明。
 
 在 Windows PowerShell 调用 `gccp`。若同级 `references/local-installation.md` 存在，优先用其中的本机可执行文件及工具链配置。运行 `gccp --version`，用各子命令的 `--help` 核实当前版本支持的参数。具体示例读命令地图和 README。独立安装时它们在本技能的 `references/docs/agent-commands.md` 和 `references/README.md`，仓库内见[命令地图](../../../docs/agent-commands.md)和[快速开始](../../../README.md#安装和绑定)。
+
+单价用 `price-view` 读“人材机汇总”的全部正用量零价项。先离线比对广材助手本地的房建、京标价协，再查现有外挂报价。可比规格按品牌偏好及合理范围内的较高报价选取，保留报价原值。用 `price-apply` 连续载入，每批只确认一次。根据命令地图处理回读、自动保存后的重绑和 `project-save --price-summary`。更新信息价时按月份用 `price-catalog --period --copy-packages` 从广材助手本地缓存复制两份原包，并核对载价回执里的价源、型号、供应商及报价时间。
 
 1. **确认工程。** 用 `doctor`、`bind` 连接用户指定且已打开的工程，复用原 `--state`，保留 `project_id` 和 `inspector`。用 `native-inspect` 确认预算树、父项和已有数量。用户授权当前工程时就在该工程操作。
 2. **查定额。** 用 `catalog search` 查随包的北京 2025 原厂索引，按编号、完整名称和专业选 `vendor_id`。用 `quota-candidates --vendor-id` 核对现场单位。索引缺项时可用 `quota-candidates --code` 查现场精确候选。

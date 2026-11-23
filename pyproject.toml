@@ -4,15 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gccp7-native-cli"
-version = "0.2.0b9"
+version = "0.3.0"
 description = "A scoped native command-line bridge for GCCP7"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {file = "LICENSE"}
 dependencies = ["jsonschema==4.23.0"]
 
+[project.optional-dependencies]
+assistant = ["frida==17.26.2; sys_platform == 'win32'"]
+
 [project.scripts]
 gccp = "gccp_foundation.application.native_cli:main"
+
+[project.gui-scripts]
+gccp-price-assistant = "gccp_material_price_assistant.material_prices:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

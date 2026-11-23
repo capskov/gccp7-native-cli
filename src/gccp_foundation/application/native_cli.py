@@ -577,6 +577,20 @@ def reconcile(state, catalog_path, runtime_path, request, *, inspector=None):
         store.close()
 
 
+def price_package_paths(args, *, copy_to=None):
+    from os import environ
+    from .information_prices import monthly_packages
+
+    if args.period:
+        if args.package or args.association:
+            raise Rejected('PRICE_PACKAGE_INPUT', 'Use a period or explicit package paths')
+        root = args.cache_root or Path(environ['APPDATA']) / 'GrandSoft/CMJGB/jgb-main'
+        return monthly_packages(root, args.period, copy_to=copy_to)
+    if not args.package or args.cache_root or copy_to:
+        raise Rejected('PRICE_PACKAGE_INPUT', 'Provide a package or a period; copy and cache-root require a period')
+    return args.package, args.association
+
+
 def main(argv=None):
     # JSON wire encoding is UTF-8 even when a Windows console defaults to GBK.
     if hasattr(sys.stdout, 'reconfigure'):
@@ -625,6 +639,44 @@ def main(argv=None):
     identity.add_argument('--close-query', action='store_true', help='Close one verified native query window and verify the budget')
     candidates.add_argument('--db', type=Path)
     native = sub.add_parser('native-inspect'); native.add_argument('--runtime', required=True, type=Path)
+    binding.add_argument('--price-summary', action='store_true', help='Bind from the native resource summary')
+    prices = sub.add_parser('price-catalog', help='Read the local Beijing construction information-price package')
+    prices.add_argument('--package', type=Path)
+    prices.add_argument('--period', help='Read both original local packages for YYYY-MM')
+    prices.add_argument('--cache-root', type=Path)
+    prices.add_argument('--copy-packages', type=Path, help='Snapshot both original package folders to a new folder')
+    prices.add_argument('--text', help='Filter by material name or specification')
+    prices.add_argument('--association', type=Path)
+    prices.add_argument('--market', type=Path)
+    prices.add_argument('--assistant-library', type=Path, help='Create a merged copy readable by the existing assistant')
+    price_plan = sub.add_parser('price-plan', help='Match zero-price resource rows to reviewed information prices')
+    price_plan.add_argument('--capture', required=True, type=Path)
+    price_plan.add_argument('--package', type=Path)
+    price_plan.add_argument('--period', help='Read both original local packages for YYYY-MM')
+    price_plan.add_argument('--cache-root', type=Path)
+    price_plan.add_argument('--association', type=Path, help='Reviewed rows from an official association issue')
+    price_plan.add_argument('--market', type=Path, help='Read the existing pricing assistant database')
+    price_plan.add_argument('--aliases', type=Path, help='Reviewed same-unit alternatives and preferred brands')
+    price_plan.add_argument('--tax-basis', required=True, choices=('ex_tax', 'incl_tax'))
+    price_view = sub.add_parser('price-view', help='Switch between the budget and native resource summary')
+    price_view.add_argument('--view', choices=('预算书', '人材机汇总', 'controls'), default='人材机汇总')
+    price_apply = sub.add_parser('price-apply', help='Apply reviewed prices to exact unlocked zero-price resource rows')
+    price_apply.add_argument('--command-id', required=True)
+    price_apply.add_argument('--request', required=True, type=Path)
+    price_apply.add_argument('--assistant-root', type=Path, help='Existing Guangcai quotation adapter checkout')
+    price_action = price_apply.add_mutually_exclusive_group()
+    price_action.add_argument('--check-only', action='store_true')
+    price_action.add_argument('--select-only', action='store_true', help='Select one reviewed resource for the pricing assistant')
+    for price_parser in (price_view, price_apply):
+        price_parser.add_argument('--state', required=True, type=Path)
+        price_parser.add_argument('--runtime-root', required=True, type=Path)
+        price_parser.add_argument('--project-id', required=True)
+    price_reconcile = sub.add_parser('price-reconcile', help='Read back one original price write without replay')
+    price_reconcile.add_argument('--state', required=True, type=Path)
+    price_reconcile.add_argument('--command-id', required=True)
+    price_recovery = price_reconcile.add_mutually_exclusive_group()
+    price_recovery.add_argument('--refresh-view', action='store_true')
+    price_recovery.add_argument('--confirm-staged', action='store_true')
     reuse = sub.add_parser('quota-reuse-plan', help='Compare reviewed material variants with a captured budget, without writing')
     reuse.add_argument('--capture', required=True, type=Path, help='JSON output of native-inspect')
     reuse.add_argument('--request', required=True, type=Path, help='JSON quota and material variants to review')
@@ -745,6 +797,7 @@ def main(argv=None):
     save.add_argument('--command-id', required=True)
     save.add_argument('--save-timeout', type=int, default=DEFAULT_SAVE_TIMEOUT)
     save.add_argument('--check-only', action='store_true')
+    save.add_argument('--price-summary', action='store_true', help='Verify Save from the resource summary')
     factor = sub.add_parser('quota-short-drive-factor', help='Apply the reviewed Beijing 2025 11-34 short-drive rule')
     for flag in ('state', 'runtime-root', 'inspector'):
         factor.add_argument('--' + flag, required=True, type=Path)
@@ -803,7 +856,7 @@ def main(argv=None):
             from .native_bootstrap import bind_open
             data = bind_open(args.state, args.runtime_root, args.workcopy, args.expected_sha256,
                              refresh_from_inspector=args.refresh_from_inspector,
-                             accept_price_updates=args.accept_price_updates)
+                             accept_price_updates=args.accept_price_updates, price_summary=args.price_summary)
         elif args.command == 'catalog' and args.operation == 'apply-review':
             from .catalog_review import apply_review
             data = apply_review(args.db, args.review)
@@ -946,7 +999,7 @@ def main(argv=None):
         elif args.command == 'project-save':
             from .native_project_save import save_project
             data = save_project(args.state, args.runtime_root, args.project_id, args.command_id,
-                                args.save_timeout, check_only=args.check_only)
+                                args.save_timeout, check_only=args.check_only, price_summary=args.price_summary)
         elif args.command == 'quota-short-drive-factor':
             from .native_standard_factor import apply_short_drive_factor
             request = dict(project_id=args.project_id, quantity=args.quantity, command_id=args.command_id,
@@ -1006,6 +1059,55 @@ def main(argv=None):
             from .quota_reuse import plan_reuse
             data = plan_reuse(json.loads(args.capture.read_text(encoding='utf-8-sig')),
                               json.loads(args.request.read_text(encoding='utf-8-sig')))
+        elif args.command == 'price-catalog':
+            from .information_prices import (combine_assistant_library, read_association_prices,
+                read_beijing_construction_prices, read_market_prices)
+            package, association = price_package_paths(args, copy_to=args.copy_packages)
+            quotes = read_beijing_construction_prices(package)
+            if association:
+                quotes.extend(read_association_prices(association))
+            if args.assistant_library:
+                if not args.market or not association or args.text:
+                    raise Rejected('PRICE_LIBRARY_INPUT_REQUIRED', 'Provide all three sources without a text filter')
+                data = combine_assistant_library(args.market, args.assistant_library, quotes)
+            elif args.market:
+                quotes.extend(read_market_prices(args.market))
+            if not args.assistant_library:
+                if args.text:
+                    quotes = [row for row in quotes if args.text.casefold() in
+                              f"{row['material']} {row['specification']}".casefold()]
+                data = dict(count=len(quotes), quotes=quotes, business_dispatches=0)
+            if args.copy_packages:
+                data['original_packages'] = [str(package), str(association)]
+        elif args.command == 'price-plan':
+            from .information_prices import (plan_prices, read_association_prices, read_beijing_construction_prices,
+                read_market_prices)
+            from .native_price import SUMMARY_HEADERS
+            capture = json.loads(args.capture.read_text(encoding='utf-8-sig'))
+            capture = capture.get('data', capture)
+            if capture['headers'] != SUMMARY_HEADERS or capture['count'] != len(capture['rows']):
+                raise Rejected('PRICE_CAPTURE_INVALID', 'Provide a complete price-view result')
+            aliases = json.loads(args.aliases.read_text(encoding='utf-8-sig')) if args.aliases else []
+            package, association = price_package_paths(args)
+            data = plan_prices(capture['rows'], read_beijing_construction_prices(package),
+                               read_association_prices(association) if association else [],
+                               tax_basis=args.tax_basis, aliases=aliases,
+                               market=read_market_prices(args.market) if args.market else [])
+        elif args.command == 'price-reconcile':
+            from .native_price import reconcile_price
+            data = reconcile_price(args.state, args.command_id, refresh_view=args.refresh_view,
+                                   confirm_staged=args.confirm_staged)
+        elif args.command in ('price-view', 'price-apply'):
+            from .native_price import price_command
+            if args.command == 'price-view':
+                data = price_command(args.state, args.runtime_root, args.project_id, operation=args.view)
+            else:
+                items = json.loads(args.request.read_text(encoding='utf-8-sig'))['items']
+                if args.select_only and len(items) != 1:
+                    raise Rejected('PRICE_SELECTION_INVALID', 'Select exactly one resource')
+                data = price_command(args.state, args.runtime_root, args.project_id, operation='apply',
+                                     command_id=args.command_id, items=items, assistant_root=args.assistant_root,
+                                     check_only='select' if args.select_only else args.check_only)
         elif args.command == 'native-inspect':
             _, worker = runtime_config(args.runtime)
             r = subprocess.run([sys.executable, '-X', 'utf8', str(worker), '--inspect'], capture_output=True,

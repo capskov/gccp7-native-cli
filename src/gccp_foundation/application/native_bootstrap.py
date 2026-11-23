@@ -105,7 +105,7 @@ def refresh_open_identity(store, manager, row, workcopy, sha256, inspector, *, a
 
 
 def bind_open(state, runtime_root, workcopy, expected_sha256, *, refresh_from_inspector=None,
-              accept_price_updates=False):
+              accept_price_updates=False, price_summary=False):
     if accept_price_updates and refresh_from_inspector is None:
         raise Rejected('PRICE_BASELINE_INSPECTOR_REQUIRED', 'Provide the original inspector to review changed prices')
     if not re.fullmatch(r'[0-9a-fA-F]{64}', expected_sha256):
@@ -153,7 +153,12 @@ def bind_open(state, runtime_root, workcopy, expected_sha256, *, refresh_from_in
             if observed.returncode:
                 raise Rejected('INSPECTOR_NOT_READY', 'No business action sent. Inspect the read-only IPC receipts.')
             capture = json.loads(observed.stdout)
-            budget = table(capture, '工程量表达式')
+            if price_summary:
+                from .native_price import summary
+                summary_rows = len(summary(capture))
+                budget = {'rows': []}
+            else:
+                budget = table(capture, '工程量表达式')
             if capture['pid'] != ctx.pid or capture['created_filetime'] != ctx.created_filetime or not capture['callback_on_app_thread']:
                 raise Rejected('SESSION_CHANGED', 'Inspector result does not match the bound session')
             manager.validate_session(ctx)
@@ -170,6 +175,8 @@ def bind_open(state, runtime_root, workcopy, expected_sha256, *, refresh_from_in
                        if r['depth'] == 1 and r['values'][1] == '部' and r['values'][12]]
             result = dict(project_id=project_id, inspector=str(manifest), parents=parents,
                           budget_rows=len(budget['rows']), business_dispatches=0)
+            if price_summary:
+                result['summary_rows'] = summary_rows
             if changed_price_rows is not None:
                 result['changed_price_rows'] = changed_price_rows
             return result

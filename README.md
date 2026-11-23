@@ -5,7 +5,7 @@
 **GCCP7 Native CLI** provides native quota lookup, insertion with initial quantity, supplemental items, deletion and audited readback for Glodon GCCP7.
 
 - **Agent 入口**：[命令地图](docs/agent-commands.md) · [主技能](.agents/skills/gccp7-native-cli/SKILL.md) · [llms.txt](llms.txt)
-- **当前版本** `0.2.0b9`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
+- **当前版本** `0.3.0`（限定环境试用版） · [实机验证与发布范围](docs/architecture.md) · [变更记录](CHANGELOG.md) · [诊断与恢复](docs/diagnostics.md)
 
 | 入口 | 当前范围 |
 | --- | --- |
@@ -20,6 +20,10 @@
 | `gccp native-inspect` / `command-status` | 同进程只读快照、审计状态及失败定位 |
 
 原生业务已在一套 GCCP7 x64、工程格式 7.5000.2.4、Qt 5.9.9 和北京 2025 概算环境中实机验证。使用前以 `doctor` 检查匹配的安装路径和组件指纹。当前主流程覆盖既有分部的查项、套入并填量、补项、指定换算、单行删除和回读。已有行独立改量、分部增删改、批量调价、通用工料机换算和保存后重开属于待扩展能力。项目独立开发。
+
+## 价格助手
+
+Windows Build 包包含 CLI wheel 和独立报价助手。双击 `price-assistant/GCCP7-Price-Assistant.exe` 可查价，首次打开时选择自己的 SQLite 报价库。安装 CLI 时使用 `python -m pip install "gccp7_native_cli-0.3.0-py3-none-any.whl[assistant]"`，也可用 `gccp-price-assistant` 启动。AI 通过 `gccp price-apply` 调用同一载价模块。见[价格命令说明](docs/agent-commands.md#人材机载价)。
 
 ## 安装和绑定
 

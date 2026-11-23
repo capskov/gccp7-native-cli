@@ -36,6 +36,36 @@
 
 安装及可复制示例见 [README](../README.md)。具体参数以对应命令的 `--help` 为准。首次调用先读版本范围，传入操作者授权的工程，避免用演示 ID 直接下单。
 
+## 人材机载价
+
+在人材机汇总页选“全部”，用 `bind --price-summary` 绑定，再用 `price-view` 取完整清单。只为正用量、未锁定、市场价为零的行准备报价。
+
+- `price-catalog --package <房建缓存目录> --association <京标价协缓存目录> --market <外挂库>` 读取三个本地价源。加 `--assistant-library <新的SQLite路径>` 可生成原助手能打开的合并库。
+- `price-plan --capture <price-view的JSON> --package <房建目录> --association <京标价协目录> --market <外挂库> --tax-basis ex_tax` 按房建、京标价协、外挂顺序匹配。核对工程税价口径。用 `--aliases` 提供已审核的同单位近似候选，每条含 `target`、`quotes` 和 `reason`，可带 `preferred_brand`。选取可比报价原值，缺价项留空。
+- `price-apply --request <审核后的JSON> --command-id <批次号>` 使用随 CLI 安装的助手。每批最多 8 项，每项含 `target`（编码、类别、名称、规格、单位）、`price`、`source`、`tax_basis` 和包含原价 `ex_tax`、`incl_tax` 的 `quote`。重新载价还须提供 `expected_current`，核对旧 `price`、`source` 和 `quantity`。可先加 `--check-only`，调试独立助手时可指定 `--assistant-root`。
+- 中断后用 `command-status` 和 `price-reconcile` 核对原批次。报价已完整载入且尚未确认时可用 `price-reconcile --confirm-staged` 续接。自动保存替换文件后，用原工程、原账本、原 inspector 和新 SHA-256 执行 `bind --price-summary --refresh-from-inspector`。最终用 `project-save --price-summary` 保存并核对磁盘文件。
+
+### 找库、核对来源和复制
+
+1. 在广材助手的“信息价”选择所需月份，分别选择房建和京标价协。下载后查看 `%APPDATA%\GrandSoft\CMJGB\jgb-main`。例如十月房建目录是 `北京_XXJ_2026_10月`，同月京标价协目录是 `北京_XXJ_2026_10月京标价协`。CLI 用 `Chapter.dat` 核对发布机构，按 `TableStructDefine.txt` 解析 `Material.dat`，保留来源编号及含税、除税原值。
+2. 外挂市场价库是外挂助手的 `data\材料市场价-*.sqlite`，也可显式指定助手中已选择的库。CLI 以只读方式读取 `quote` 和 `capture`，保留报价月份、品牌、型号及价格。先核对库的用途和条数，避免把专题库误当成通用库。
+3. 在同一个 PowerShell 会话执行下列命令。合并时复制原外挂库，再将两个信息价期表写入新 SQLite。新库可在外挂助手用“打开数据库”选择。输出文件名必须是新路径。
+
+```powershell
+$cache = Join-Path $env:APPDATA 'GrandSoft\CMJGB\jgb-main'
+$housing = Join-Path $cache '北京_XXJ_2026_10月'
+$association = Join-Path $cache '北京_XXJ_2026_10月京标价协'
+$market = (Resolve-Path 'GccpMaterialPriceAssistant\data\材料市场价-2026-11.sqlite').Path
+$merged = Join-Path (Split-Path $market) '材料市场价-合并2026-11.sqlite'
+
+gccp price-catalog --package $housing --association $association --market $market --text '圆钉'
+gccp price-catalog --package $housing --association $association --market $market --assistant-library $merged
+```
+
+以后更新月份，用 `gccp price-catalog --period 2026-10 --copy-packages <新的原包存档目录> --market $market --assistant-library <新的SQLite路径>`。命令从广材助手下载目录同步两套完整原厂包并解读报价。重读存档时传 `--period 2026-10 --cache-root <原包存档目录>`，也可用于 `price-plan`。
+
+市场价沿用 `InputAllResRate` 双击载价消息。报价名称、规格、品牌、供应商和原始含税、除税价送入对应字段，价格来源显示为 `市场价(年月)`，有日的保留到日。房建显示 `北京信息价(年月)`，京标价协使用 `北京信息价(年月京标价协)`。报价日期随原报价保存在回执，供应时间字段保留广联达原有用途。读回中 `metadata_unconfirmed` 标明应用未回显的字段，包括同价汇总行上丢失的来源。工程原材料的名称、规格和数量用于核对目标身份，借用型号记录在报价凭据。
+
 ## 如何处理回执
 
 正常返回的 `schema` 为 `gccp.native-cli.v0.1`。标准业务成功退出码为 0，`status` 为 `ok`，结果在 `data`。阻断退出码为 2，`status` 为 `blocked`，检查 `error.code`、`error.message` 和 `error.retry_allowed`。
