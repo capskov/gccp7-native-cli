@@ -331,7 +331,7 @@ def reconcile_pre_dispatch_stop(store, worker, request, original, result, *, can
     return final
 
 
-def reconcile_rounded_quantity(store, worker, config, request, result):
+def reconcile_rounded_quantity(store, worker, config, request, result, *, reviewed_expression=None):
     from .native_build import profile_path
     from .native_runtime import displayed_quantity, is_blank_quota, quota_trace_note
     from .native_worker_support import RuntimeProfile, SessionManager, WindowsDesktop, execution_lock, rows, snap, table
@@ -342,8 +342,15 @@ def reconcile_rounded_quantity(store, worker, config, request, result):
     job = store.job(result['job_id'])
     project = store.db.execute('SELECT * FROM projects WHERE project_id=?', (project_id,)).fetchone()
     expected = config['expected_live_identity']
-    display = displayed_quantity(expected['unit'], request['quantity'])
-    if (request.get('save', True) or display == request['quantity'] or job['project_id'] != project_id
+    from .native_runtime import normalize_quantity
+
+    expression = normalize_quantity(reviewed_expression) if reviewed_expression is not None else request['quantity']
+    display = displayed_quantity(expected['unit'], expression)
+    if reviewed_expression is not None and (
+            expected['unit'] not in ('10m2', '100m2') or result.get('error_type') != 'AssertionError'
+            or displayed_quantity(expected['unit'], expression) != request['quantity']):
+        raise Rejected('EVIDENCE_INCOMPLETE', 'The reviewed expression must reverse the original extra area conversion')
+    if (request.get('save', True) or display == expression or job['project_id'] != project_id
             or job['job_key'] != command_id or project['owner'] != job['job_id']):
         raise Rejected('EVIDENCE_INCOMPLETE', 'A no-save owned command with a reviewed display difference is required')
     with execution_lock(store.root, project['file_id']):
@@ -365,12 +372,23 @@ def reconcile_rounded_quantity(store, worker, config, request, result):
         records = [Path(p).resolve(strict=True) for p in result['ipc_records']]
         if len(records) < 3 or any(p.parent != worker.parent/'ipc' for p in records):
             raise Rejected('EVIDENCE_INCOMPLETE', 'Original IPC files required')
-        sent, observed, blocked = (json.loads(p.read_text(encoding='utf-8')) for p in records[-3:])
-        if ([item['operation'] for item in (sent, observed, blocked)] != ['quantity.normal.one', 'inspect', 'resources.key.up']
-                or any(item['request']['command_id'] != command_id for item in (sent, observed, blocked))
+        if reviewed_expression is None:
+            sent, observed, blocked = (json.loads(p.read_text(encoding='utf-8')) for p in records[-3:])
+            valid_sequence = ([item['operation'] for item in (sent, observed, blocked)] ==
+                              ['quantity.normal.one', 'inspect', 'resources.key.up']
+                              and blocked['receipt'].get('error') == 'normal_up_context_guard')
+        else:
+            ipc = [json.loads(p.read_text(encoding='utf-8')) for p in records]
+            indices = [i for i, item in enumerate(ipc) if item['operation'] == 'quantity.normal.one']
+            if len(indices) != 1 or any(item['operation'] == 'save' for item in ipc):
+                raise Rejected('EVIDENCE_INCOMPLETE', 'Exactly one original quantity dispatch and no Save are required')
+            sent = ipc[indices[0]]
+            observed = next((item for item in reversed(ipc[indices[0] + 1:])
+                             if item['operation'] == 'inspect' and item.get('receipt')), None)
+            valid_sequence = observed is not None
+        if (not valid_sequence or any(item['request']['command_id'] != command_id for item in (sent, observed))
                 or sent['request'].get('outer_intent_id') != intent
-                or sent['receipt'].get('quantity_field_write_dispatches') != 1
-                or blocked['receipt'].get('error') != 'normal_up_context_guard'):
+                or sent['receipt'].get('quantity_field_write_dispatches') != 1):
             raise Rejected('EVIDENCE_INCOMPLETE', 'One quantity write and its blocked follow-up must be recorded')
         before = store.read_evidence(json.loads(action['context'])['preflight_evidence_ids'][0], project_id)
         path = before['data']['target_path']
@@ -380,18 +398,36 @@ def reconcile_rounded_quantity(store, worker, config, request, result):
                                text=True, encoding='utf-8', timeout=120, check=True)
         capture = json.loads(fresh.stdout)
         budget = table(capture, '工程量表达式')
+        original_observed = table(observed['receipt'], '工程量表达式')
         if (capture.get('status') != 'observed' or capture.get('callback_on_app_thread') is not True
                 or capture.get('pid') != session.pid or capture.get('created_filetime') != session.created_filetime
-                or budget['rows'] != table(observed['receipt'], '工程量表达式')['rows']):
+                or (reviewed_expression is None and budget['rows'] != original_observed['rows'])):
             raise Rejected('NATIVE_READBACK_CHANGED', 'Fresh budget differs from the original post-write observation')
         previous, current = rows(table(before['data']['capture'], '工程量表达式')), rows(budget)
         quota = current[path]['values']
+        if reviewed_expression is not None:
+            from decimal import Decimal, ROUND_HALF_UP
+
+            observed_rows = rows(original_observed)
+            reparsed = observed_rows[path]['values']
+            if (observed['receipt'].get('pid') != session.pid
+                    or observed['receipt'].get('created_filetime') != session.created_filetime
+                    or reparsed[4] != request['quantity']
+                    or Decimal(reparsed[6]) != Decimal(displayed_quantity(expected['unit'], request['quantity']))
+                    or set(current) != set(observed_rows)
+                    or Decimal(quota[8]) != (Decimal(quota[6]) * Decimal(quota[7])).quantize(Decimal('0.01'), ROUND_HALF_UP)):
+                raise Rejected('NATIVE_READBACK_CHANGED', 'Original dispatch or corrected amount could not be verified')
+            for row_path, old in observed_rows.items():
+                allowed = {4, 6, 8} if row_path == path else {8} if path.startswith(row_path + '/') else set()
+                if any(a != b and col not in allowed
+                       for col, (a, b) in enumerate(zip(old['values'], current[row_path]['values'], strict=True))):
+                    raise Rejected('NATIVE_READBACK_CHANGED', 'A field outside the corrected quantity changed')
         original_quota = previous[path]['values']
         note = quota_trace_note(command_id, request.get('item_label'))
         identity = (quota[2], quota[12])
         valid_identities = {(expected['name'], note), (f"{expected['name']} {note}", '')}
         if (identity not in valid_identities or identity != (original_quota[2], original_quota[12])
-                or quota[:2] != [expected['code'], '定'] or quota[3:5] != [expected['unit'], request['quantity']]
+                or quota[:2] != [expected['code'], '定'] or quota[3:5] != [expected['unit'], expression]
                 or quota[6] != display or original_quota[6] != '0'):
             raise Rejected('NATIVE_READBACK_CHANGED', 'The exact inserted item and quantity expression must match')
         parent, slot = path.rsplit('/', 1)
@@ -406,10 +442,10 @@ def reconcile_rounded_quantity(store, worker, config, request, result):
                 raise Rejected('NATIVE_READBACK_CHANGED', 'A non-target budget field changed')
         if pending:
             ref = store.put_evidence(project_id, session.session_id, 'native_rounded_quantity_readback',
-                                     dict(capture=capture, target_path=path, quantity=request['quantity'], display=display))
+                                     dict(capture=capture, target_path=path, quantity=expression, display=display))
             store.append_receipt(intent, DispatchReceipt('quantity', DispatchState.SENT,
                 Observation(snap(budget), True, 'native_rounded_quantity_readback',
-                            dict(target_path=path, quantity=request['quantity'], display=display), (ref,)), (ref,)))
+                            dict(target_path=path, quantity=expression, display=display), (ref,)), (ref,)))
         else:
             ref, = json.loads(action['receipt'])['evidence_ids']
             if store.read_evidence(ref, project_id)['kind'] != 'native_rounded_quantity_readback':
@@ -483,7 +519,7 @@ def reconcile_inspection_timeout(store, worker, request, original, result, inspe
         return final
 
 
-def reconcile(state, catalog_path, runtime_path, request, *, inspector=None):
+def reconcile(state, catalog_path, runtime_path, request, *, inspector=None, reviewed_expression=None):
     """Read-only native verification of an unknown outer dispatch, never run the worker business path."""
     config, worker = runtime_config(runtime_path)
     if config['approved_request'] != request:
@@ -500,6 +536,11 @@ def reconcile(state, catalog_path, runtime_path, request, *, inspector=None):
         if original['phase'] in ('readback_verified', 'no_dispatch_verified'):
             return {**json.loads(original['result']), 'idempotent_reentry': True, 'new_business_dispatches': 0}
         result = json.loads(original['result'] or '{}')
+        if reviewed_expression is not None:
+            if result.get('save_dispatches') != 0 or result.get('command_id') != request['command_id']:
+                raise Rejected('EVIDENCE_INCOMPLETE', 'Original unsaved command receipt is required')
+            return reconcile_rounded_quantity(store, worker, config, request, result,
+                                              reviewed_expression=reviewed_expression)
         if (config.get('selected_anchor_contract') == 1 and result.get('command_id') == request['command_id']
                 and result.get('save_dispatches') == 0 and result.get('error_type') == 'TimeoutError'
                 and len(result.get('ipc_records', [])) == 1 and not result.get('job_id')):
@@ -699,6 +740,7 @@ def main(argv=None):
     for flag in ('db', 'runtime', 'request', 'state'):
         recovery.add_argument('--' + flag, required=flag != 'db', type=Path)
     recovery.add_argument('--inspector', type=Path, help='Bound read-only inspector for an initial inspection timeout')
+    recovery.add_argument('--review-expression', help='Reconcile an already corrected scaled area expression against the original dispatch')
     for operation, help_text in (
         ('runtime-prepare', 'Check scope and prepare a runtime without dispatching a quota write'),
         ('quota-run', 'Insert one verified quota, fill its quantity, and read it back'),
@@ -919,7 +961,7 @@ def main(argv=None):
             data = execute(args.state, args.db, args.runtime, json.loads(args.request.read_text(encoding='utf-8-sig')))
         elif args.command == 'command-reconcile':
             data = reconcile(args.state, args.db, args.runtime, json.loads(args.request.read_text(encoding='utf-8-sig')),
-                             inspector=args.inspector)
+                             inspector=args.inspector, reviewed_expression=args.review_expression)
         elif args.command in ('runtime-prepare', 'quota-run'):
             from .native_runtime import prepare_entry
             save = args.parent_section is None and not args.no_save
@@ -1062,8 +1104,10 @@ def main(argv=None):
         elif args.command == 'price-catalog':
             from .information_prices import (combine_assistant_library, read_association_prices,
                 read_beijing_construction_prices, read_market_prices)
-            package, association = price_package_paths(args, copy_to=args.copy_packages)
-            quotes = read_beijing_construction_prices(package)
+            market_only = (args.market and not any((args.package, args.period, args.association,
+                                                   args.cache_root, args.copy_packages, args.assistant_library)))
+            package, association = (None, None) if market_only else price_package_paths(args, copy_to=args.copy_packages)
+            quotes = read_beijing_construction_prices(package) if package else []
             if association:
                 quotes.extend(read_association_prices(association))
             if args.assistant_library:

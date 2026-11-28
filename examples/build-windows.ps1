@@ -17,6 +17,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Assistant build failed' }
     Rename-Item -LiteralPath (Join-Path $bundle 'GCCP7-Price-Assistant') -NewName 'price-assistant'
     Copy-Item -LiteralPath README.md, LICENSE, THIRD-PARTY-NOTICES.md -Destination $bundle
+    Copy-Item -LiteralPath examples/setup-windows.ps1 -Destination $bundle
+    Copy-Item -LiteralPath docs -Destination $bundle -Recurse
+    Copy-Item -LiteralPath .agents/skills -Destination $bundle -Recurse
+    foreach ($skill in Get-ChildItem -LiteralPath (Join-Path $bundle 'skills') -Directory) {
+        $references = Join-Path $skill.FullName 'references'
+        New-Item -ItemType Directory -Path $references -Force | Out-Null
+        Copy-Item -LiteralPath README.md -Destination $references
+        Copy-Item -LiteralPath docs -Destination $references -Recurse
+    }
     $zip = Join-Path $Output "Gccp7NativeCli-v$version-Windows-Build.zip"
     Compress-Archive -Path (Join-Path $bundle '*') -DestinationPath $zip
     $hash = (Get-FileHash -LiteralPath $zip).Hash.ToLower()

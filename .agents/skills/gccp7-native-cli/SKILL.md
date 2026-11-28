@@ -3,9 +3,11 @@ name: gccp7-native-cli
 description: 当用户说“用 CLI 操作”“原生桥”“中间桥”，或要求在当前广联达 GCCP7 概算中查定额、套定额、填量、补项、删项时，使用 Windows 本机 gccp 命令执行和核对。Use for Glodon GCCP7 estimate operations through its native CLI.
 ---
 
-# GCCP7 原生桥 CLI · 0.3.0
+# GCCP7 原生桥 CLI · 0.3.1
 
-首次加载时向用户说明本技能对应 GCCP7 原生桥 CLI 0.3.0，并用实际执行的 gccp --version 核对，出现版本差异时明确说明。
+首次加载时向用户说明本技能对应 GCCP7 原生桥 CLI 0.3.1，并用实际执行的 gccp --version 核对，出现版本差异时明确说明。
+
+新电脑先读同级 references/docs/first-install.md（仓库内在 docs/first-install.md）；所有命令的逐项参数在 command-reference.md。
 
 在 Windows PowerShell 调用 `gccp`。若同级 `references/local-installation.md` 存在，优先用其中的本机可执行文件及工具链配置。运行 `gccp --version`，用各子命令的 `--help` 核实当前版本支持的参数。具体示例读命令地图和 README。独立安装时它们在本技能的 `references/docs/agent-commands.md` 和 `references/README.md`，仓库内见[命令地图](../../../docs/agent-commands.md)和[快速开始](../../../README.md#安装和绑定)。
 

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import hashlib
+import os
 from pathlib import Path
 
 from gccp_foundation.domain.errors import ErrorCategory, ErrorDetail, FoundationError
@@ -30,12 +31,26 @@ class RuntimeProfile:
         required = {"profile_id", "launcher", "process_executable", "library", "edition", "trade", "fingerprints"}
         if set(data) != required or not data["fingerprints"]:
             raise ValueError("Incomplete or unknown profile fields")
+        if data["profile_id"] == "gccp7-bj2025-local-session" and os.environ.get("GCCP7_INSTALL_ROOT"):
+            original = Path(r"C:\Program Files\Glodon\GCCP\7.0-X64")
+            root = Path(os.environ["GCCP7_INSTALL_ROOT"])
+            if not root.is_absolute():
+                raise ValueError("GCCP7_INSTALL_ROOT must be absolute")
+            def relocated(value):
+                return str((root / Path(value).relative_to(original)).resolve())
+
+            data["launcher"] = relocated(data["launcher"])
+            data["process_executable"] = relocated(data["process_executable"])
+            data["fingerprints"] = {relocated(value): sha for value, sha in data["fingerprints"].items()}
         return cls(*(data[k] for k in ("profile_id", "launcher", "process_executable", "library", "edition", "trade")),
                    tuple((str(Path(p).resolve()), sha.lower()) for p, sha in data["fingerprints"].items()))
 
     def verify(self):
         matches = []
         for path, expected in self.fingerprints:
+            if not Path(path).is_file():
+                raise FoundationError(ErrorDetail("PROFILE_MISMATCH", ErrorCategory.VERSION,
+                    f"Missing GCCP component: {path}. Set GCCP7_INSTALL_ROOT for a non-default installation."))
             actual = file_sha256(path)
             if actual != expected:
                 raise FoundationError(ErrorDetail("PROFILE_MISMATCH", ErrorCategory.VERSION, f"Component mismatch: {Path(path).name}"))

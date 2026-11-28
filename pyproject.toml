@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gccp7-native-cli"
-version = "0.3.0"
+version = "0.3.1"
 description = "A scoped native command-line bridge for GCCP7"
 readme = "README.md"
 requires-python = ">=3.12"

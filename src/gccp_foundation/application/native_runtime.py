@@ -43,6 +43,13 @@ def normalize_quantity(quantity, *, allow_zero=False):
 
 
 def displayed_quantity(unit, quantity):
+    if unit in ('10m2', '100m2'):
+        shown = Decimal(quantity) / Decimal(unit[:-2])
+        if shown.normalize().as_tuple().exponent < -4:
+            raise Rejected('QUANTITY_NOT_REVIEWED', 'Scaled area quantities with more than four display decimals are unverified')
+        return normalize_quantity(format(shown.normalize(), 'f'))
+    if unit in ('10m3', '100m'):
+        raise Rejected('QUANTITY_UNIT_NOT_REVIEWED', 'This scaled unit has no verified quantity write contract')
     if unit not in ('m', 'm3'):
         return quantity
     shown = Decimal(quantity).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
