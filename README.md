@@ -58,6 +58,8 @@ $binding.data | Select-Object project_id, inspector, parents
 
 `parents` 只列有业务 ID 的顶层分部，可能为空。二级分部的完整名称从预算树读回，套项时从顶层开始逐级传入 `--parent-section`。
 
+预算树从零开始时，先看 [建立一级、二级分部并套定额](docs/budget-sections.md)。
+
 ## 单条业务
 
 遇到多种构件适用同一定额时，可先核对既有预算，再用 [定额复用](docs/quota-reuse.md) 批量追加主材变体。是否复用以专业、定额工作内容和计量单位为准。
